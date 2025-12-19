@@ -3,6 +3,7 @@ use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows::Win32::Devices::Display::{GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR, DestroyPhysicalMonitor};
 
 pub struct Monitor {
+    #[allow(dead_code)]
     pub hmonitor: HMONITOR,
     pub physical: HANDLE,
     pub name: String,
