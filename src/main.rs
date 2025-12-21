@@ -17,6 +17,7 @@ use windows::{
     Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect},
     Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture},
     Win32::System::SystemServices::MK_LBUTTON,
+    Win32::System::LibraryLoader::GetModuleHandleW,
 };
 
 static mut APP_STATE: Option<AppState> = None;
@@ -27,8 +28,8 @@ static mut DRAGGING_MONITOR_IDX: Option<usize> = None;
 
 fn main() -> Result<()> {
     unsafe {
-        win::init_com();
-        win::init_dpi();
+        win::init_com()?;
+        win::init_dpi()?;
 
         // Initialize state
         let monitors = monitors::enumerate_monitors();
@@ -50,12 +51,12 @@ fn main() -> Result<()> {
 
         RENDERER = Some(render::Renderer::new()?);
 
-        // Initial paint
-        // SendMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0)); 
+        let instance = GetModuleHandleW(None)?.into();
+        let _hwnd = window::create(instance, "Brightness Control", Some(wnd_proc))?;
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            TranslateMessage(&message);
+            let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
     }
@@ -74,12 +75,11 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         let _ = renderer.render(window, state);
                     }
                 }
-                EndPaint(window, &ps);
+                let _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
             WM_SIZE => {
-                 // Trigger repaint on resize
-                 InvalidateRect(Some(window), None, false);
+                 let _ = InvalidateRect(Some(window), None, false);
                  LRESULT(0)
             }
             WM_LBUTTONDOWN => {
@@ -99,7 +99,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             }
             WM_LBUTTONUP => {
                 DRAGGING_MONITOR_IDX = None;
-                ReleaseCapture();
+                let _ = ReleaseCapture();
                 LRESULT(0)
             }
             WM_DESTROY => {
@@ -113,47 +113,41 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
 
 unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
     if let Some(state) = APP_STATE.as_mut() {
-        // Layout calculations must match render.rs
-        let mut cur_y = 24.0;
-        let padding = 16.0; // Left padding
-        let slider_height = 4.0;
-        let monitor_spacing = 40.0;
-        // Text height approx 20
+        // Layout calculations MUST match render.rs
+        let margin_x = 24.0;
+        let mut cur_y = 24.0 + 48.0; // Header spacing
+        let monitor_spacing = 48.0;
         
         // Get window width for layout
         let mut rect = windows::Win32::Foundation::RECT::default();
-        windows::Win32::UI::WindowsAndMessaging::GetClientRect(window, &mut rect);
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(window, &mut rect);
         let width = (rect.right - rect.left) as f32;
         
-        let slider_start_x = padding;
-        let slider_end_x = width - padding - 40.0; // 40px for percentage text
-        let slider_width = slider_end_x - slider_start_x;
+        let slider_width = width - 2.0 * margin_x;
 
         // If clicking down, find which slider
         if is_down {
             for (i, _) in state.monitors.iter().enumerate() {
-                // Check if hit is roughly within slider area
-                // Slider is at cur_y + 20 (text) + 8 (spacing) = cur_y + 28
-                // Height 4. Hit target should be larger. Say +/- 10px.
+                // Monitor label is 16px. Slider is y + 24.
+                // Slider track is at cur_y + 24 + 8 = cur_y + 32
+                let slider_top = cur_y + 24.0 + 8.0;
+                let slider_bottom = slider_top + 4.0;
                 
-                let slider_top = cur_y + 20.0 + 8.0;
-                let hit_top = slider_top - 10.0;
-                let hit_bottom = slider_top + slider_height + 10.0;
+                let hit_top = slider_top - 12.0;
+                let hit_bottom = slider_bottom + 12.0;
                 
                 if (y as f32) >= hit_top && (y as f32) <= hit_bottom {
                     DRAGGING_MONITOR_IDX = Some(i);
                     break;
                 }
                 
-                cur_y += 24.0; // Text height
-                cur_y += monitor_spacing;
+                cur_y += 24.0 + monitor_spacing;
             }
         }
 
         // Processing movement/drag
         if let Some(idx) = DRAGGING_MONITOR_IDX {
-            // Apply new value
-            let pct = ((x as f32 - slider_start_x) / slider_width).clamp(0.0, 1.0);
+            let pct = ((x as f32 - margin_x) / slider_width).clamp(0.0, 1.0);
             let new_val = (pct * 100.0) as u32;
 
             if state.brightness[idx] != new_val {
@@ -164,7 +158,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
                 brightness::set_brightness(m, new_val);
                 
                 // Repaint
-                InvalidateRect(Some(window), None, false);
+                let _ = InvalidateRect(Some(window), None, false);
             }
         }
     }
