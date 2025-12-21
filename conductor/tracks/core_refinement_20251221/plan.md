@@ -10,7 +10,7 @@
 - [x] Task: Implement the basic vertical stack rendering logic with Segoe UI typography.
 - [x] Task: Conductor - User Manual Verification 'Rendering Engine' (Protocol in workflow.md)
 
-## Phase 3: State & Input Integration
+## Phase 3: State & Input Integration [checkpoint: f37a493]
 - [x] Task: Integrate `state.rs` with the message loop to trigger redraws on state changes.
 - [x] Task: Implement basic mouse hit-testing for slider placeholders.
 - [x] Task: Conductor - User Manual Verification 'State & Input Integration' (Protocol in workflow.md)
