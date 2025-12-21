@@ -1,6 +1,6 @@
 # Plan: Refine Core Implementation
 
-## Phase 1: Foundational Infrastructure
+## Phase 1: Foundational Infrastructure [checkpoint: 79f735f]
 - [x] Task: Complete Win32 Window Class registration and DPI awareness initialization in `win.rs` and `window.rs`.
 - [x] Task: Implement robust monitor enumeration in `monitors.rs` using `EnumDisplayMonitors` and `GetPhysicalMonitorsFromHMONITOR`.
 - [x] Task: Conductor - User Manual Verification 'Foundational Infrastructure' (Protocol in workflow.md)
