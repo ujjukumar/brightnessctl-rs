@@ -4,18 +4,34 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.27"
-egui = "0.27"
-windows = { version = "0.56", features = [
-  "Win32_Graphics_Dxgi",
-  "Win32_Graphics_Gdi",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_Devices_Display",
-  "Win32_System_Com"
-]}
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Devices_Display", 
+    # For monitor enumeration and VCP
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_HiDpi",
+    "Win32_System_SystemServices",
+    "Foundation_Numerics",
+] }
+windows_numerics = { version = "0.3.1", package = "windows-numerics" }
 
 [profile.release]
-lto = true
+opt-level = "z"
+lto = "fat"
 panic = "abort"
-strip = true
+strip = "symbols"
 codegen-units = 1
+incremental = false

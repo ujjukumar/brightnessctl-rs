@@ -1,60 +1,53 @@
-use crate::monitors::Monitor;
-use windows::Win32::Devices::Display::{GetMonitorBrightness, SetMonitorBrightness, GetVCPFeatureAndVCPFeatureReply, SetVCPFeature};
-use std::thread;
-use std::time::Duration;
+use crate::state::Monitor;
+use windows::Win32::Devices::Display::{
+    GetMonitorBrightness, SetMonitorBrightness,
+    GetVCPFeatureAndVCPFeatureReply, SetVCPFeature,
+};
 
-pub fn get_brightness(monitor: &Monitor) -> Option<u32> {
+// VCP Code for Brightness
+const VCP_CODE_BRIGHTNESS: u8 = 0x10;
+
+pub fn get_brightness(m: &Monitor) -> Option<u32> {
     unsafe {
-        // 1. Try DDC/CI (External Monitors) - PRIORITY
-        let mut current_vcp: u32 = 0;
-        let mut max_vcp: u32 = 0;
-        if GetVCPFeatureAndVCPFeatureReply(monitor.physical, 0x10, None, &mut current_vcp as *mut _, Some(&mut max_vcp)) != 0 {
-             if max_vcp > 0 {
-                return Some((current_vcp * 100) / max_vcp);
-             }
+        // Try Internal (High-level API)
+        let mut min = 0;
+        let mut current = 0;
+        let mut max = 0;
+        // windows crate maps BOOL return to Ok(()) if success? No, documentation varies. 
+        // Error implies i32. 0 is FALSE, Non-zero is TRUE.
+        if GetMonitorBrightness(m.physical, &mut min, &mut current, &mut max) != 0 {
+            return Some(current);
         }
 
-        // 2. Try Internal Display API (Laptop panels) - FALLBACK
-        let mut min: u32 = 0;
-        let mut current: u32 = 0;
-        let mut max: u32 = 0;
-        if GetMonitorBrightness(monitor.physical, &mut min, &mut current, &mut max) != 0 {
-            if max > min {
-                let range = max - min;
-                let offset = current - min;
-                return Some((offset * 100) / range);
+        // Try External (DDC/CI)
+        let mut current_vcp = 0;
+        let mut max_vcp = 0;
+        if GetVCPFeatureAndVCPFeatureReply(m.physical, VCP_CODE_BRIGHTNESS, None, &mut current_vcp, Some(&mut max_vcp)) != 0 {
+            if max_vcp > 0 {
+                return Some((current_vcp * 100) / max_vcp);
             }
+            return Some(current_vcp);
         }
     }
     None
 }
 
-pub fn set_brightness(monitor: &Monitor, value: u32) -> bool {
+pub fn set_brightness(m: &Monitor, value: u32) -> bool {
     let value = value.clamp(0, 100);
-
     unsafe {
-        // 1. Try DDC/CI - PRIORITY with RETRY
-        let mut current_vcp: u32 = 0;
-        let mut max_vcp: u32 = 0;
-        if GetVCPFeatureAndVCPFeatureReply(monitor.physical, 0x10, None, &mut current_vcp as *mut _, Some(&mut max_vcp)) != 0 {
-             if max_vcp > 0 {
-                 let target = (value * max_vcp) / 100;
-                 for _ in 0..3 {
-                     if SetVCPFeature(monitor.physical, 0x10, target) != 0 {
-                         return true;
-                     }
-                     thread::sleep(Duration::from_millis(50));
-                 }
-             }
+        // Try Internal
+        if SetMonitorBrightness(m.physical, value) != 0 {
+            return true;
         }
 
-        // 2. Try Internal Display API - FALLBACK
-        let mut min: u32 = 0;
-        let mut current: u32 = 0;
-        let mut max: u32 = 0;
-        if GetMonitorBrightness(monitor.physical, &mut min, &mut current, &mut max) != 0 && max > min {
-             let target = min + (value * (max - min)) / 100;
-             return SetMonitorBrightness(monitor.physical, target) != 0;
+        // Try External
+        let mut current_vcp = 0;
+        let mut max_vcp = 0;
+        if GetVCPFeatureAndVCPFeatureReply(m.physical, VCP_CODE_BRIGHTNESS, None, &mut current_vcp, Some(&mut max_vcp)) != 0 {
+             let new_val = (value * max_vcp) / 100;
+             if SetVCPFeature(m.physical, VCP_CODE_BRIGHTNESS, new_val) != 0 {
+                 return true;
+             }
         }
     }
     false

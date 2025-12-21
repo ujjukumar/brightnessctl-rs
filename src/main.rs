@@ -1,64 +1,171 @@
-use eframe::egui;
+#![allow(static_mut_refs)]
+#![allow(unsafe_op_in_unsafe_fn)]
+
 mod win;
+mod window;
 mod monitors;
 mod brightness;
+mod state;
+mod render;
 
-fn main() -> Result<(), eframe::Error> {
-    win::init_com();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 250.0]),
-        ..Default::default()
-    };
-    
-    eframe::run_native(
-        "Brightness Control",
-        options,
-        Box::new(|_cc| {
-            let monitors = monitors::enumerate_monitors();
-            let mut values = Vec::new();
+use crate::state::AppState;
 
-            for m in &monitors {
-                values.push(brightness::get_brightness(m).unwrap_or(50));
-            }
+use windows::{
+    core::*,
+    Win32::Foundation::*,
+    Win32::UI::WindowsAndMessaging::*,
+    Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect},
+    Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture},
+    Win32::System::SystemServices::MK_LBUTTON,
+};
 
-            Box::new(App { monitors, values })
-        }),
-    )
-}
+static mut APP_STATE: Option<AppState> = None;
+static mut RENDERER: Option<render::Renderer> = None;
 
-struct App {
-    monitors: Vec<monitors::Monitor>,
-    values: Vec<u32>,
-}
+// Input state
+static mut DRAGGING_MONITOR_IDX: Option<usize> = None;
 
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.heading("Monitor Brightness");
-            });
-            ui.add_space(10.0);
+fn main() -> Result<()> {
+    unsafe {
+        win::init_com();
+        win::init_dpi();
 
-            if self.monitors.is_empty() {
-                ui.label("No supported monitors found.");
+        // Initialize state
+        let monitors = monitors::enumerate_monitors();
+        let mut initial_brightness = Vec::new();
+
+        for m in &monitors {
+            if let Some(b) = brightness::get_brightness(m) {
+                initial_brightness.push(b);
             } else {
-                for (i, monitor) in self.monitors.iter().enumerate() {
-                    ui.group(|ui| {
-                        ui.label(format!("Display {}: {}", i + 1, monitor.name));
-                        ui.add_space(5.0);
-                        
-                        let slider = egui::Slider::new(&mut self.values[i], 0..=100)
-                            .text("%")
-                            .clamp_to_range(true);
-
-                        if ui.add(slider).drag_stopped() {
-                             brightness::set_brightness(monitor, self.values[i]);
-                        }
-                    });
-                    ui.add_space(10.0);
-                }
+                initial_brightness.push(50); // Default if read fails
             }
+        }
+
+        APP_STATE = Some(AppState {
+            monitors,
+            brightness: initial_brightness,
+            hot_monitor: None,
         });
+
+        RENDERER = Some(render::Renderer::new()?);
+
+        // Initial paint
+        // SendMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0)); 
+
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
+    Ok(())
+}
+
+extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        match message {
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                BeginPaint(window, &mut ps);
+                if let Some(renderer) = RENDERER.as_mut() {
+                    if let Some(state) = APP_STATE.as_ref() {
+                        let _ = renderer.render(window, state);
+                    }
+                }
+                EndPaint(window, &ps);
+                LRESULT(0)
+            }
+            WM_SIZE => {
+                 // Trigger repaint on resize
+                 InvalidateRect(Some(window), None, false);
+                 LRESULT(0)
+            }
+            WM_LBUTTONDOWN => {
+                let x = (lparam.0 & 0xffff) as i32;
+                let y = ((lparam.0 >> 16) & 0xffff) as i32;
+                handle_input(window, x, y, true);
+                SetCapture(window);
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                if (wparam.0 & MK_LBUTTON.0 as usize) != 0 {
+                    let x = (lparam.0 & 0xffff) as i32;
+                    let y = ((lparam.0 >> 16) & 0xffff) as i32;
+                    handle_input(window, x, y, false);
+                }
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                DRAGGING_MONITOR_IDX = None;
+                ReleaseCapture();
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                PostQuitMessage(0);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(window, message, wparam, lparam),
+        }
+    }
+}
+
+unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
+    if let Some(state) = APP_STATE.as_mut() {
+        // Layout calculations must match render.rs
+        let mut cur_y = 24.0;
+        let padding = 16.0; // Left padding
+        let slider_height = 4.0;
+        let monitor_spacing = 40.0;
+        // Text height approx 20
+        
+        // Get window width for layout
+        let mut rect = windows::Win32::Foundation::RECT::default();
+        windows::Win32::UI::WindowsAndMessaging::GetClientRect(window, &mut rect);
+        let width = (rect.right - rect.left) as f32;
+        
+        let slider_start_x = padding;
+        let slider_end_x = width - padding - 40.0; // 40px for percentage text
+        let slider_width = slider_end_x - slider_start_x;
+
+        // If clicking down, find which slider
+        if is_down {
+            for (i, _) in state.monitors.iter().enumerate() {
+                // Check if hit is roughly within slider area
+                // Slider is at cur_y + 20 (text) + 8 (spacing) = cur_y + 28
+                // Height 4. Hit target should be larger. Say +/- 10px.
+                
+                let slider_top = cur_y + 20.0 + 8.0;
+                let hit_top = slider_top - 10.0;
+                let hit_bottom = slider_top + slider_height + 10.0;
+                
+                if (y as f32) >= hit_top && (y as f32) <= hit_bottom {
+                    DRAGGING_MONITOR_IDX = Some(i);
+                    break;
+                }
+                
+                cur_y += 24.0; // Text height
+                cur_y += monitor_spacing;
+            }
+        }
+
+        // Processing movement/drag
+        if let Some(idx) = DRAGGING_MONITOR_IDX {
+            // Apply new value
+            let pct = ((x as f32 - slider_start_x) / slider_width).clamp(0.0, 1.0);
+            let new_val = (pct * 100.0) as u32;
+
+            if state.brightness[idx] != new_val {
+                state.brightness[idx] = new_val;
+                
+                // Hardware update
+                let m = &state.monitors[idx];
+                brightness::set_brightness(m, new_val);
+                
+                // Repaint
+                InvalidateRect(Some(window), None, false);
+            }
+        }
     }
 }

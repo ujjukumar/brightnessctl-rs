@@ -1,23 +1,34 @@
-# Brightness Controller — Implementation Instructions (Rust / Windows 11)
+# Brightness Control — Native Windows Implementation Instructions
 
 ## Objective
-Implement a **fast, minimal, Windows-native brightness controller** in Rust.
+Build a **native, professional, Windows 11 brightness controller** with:
+- Instant startup
+- < 1 MB release binary
+- Native Windows look (not “custom themed”)
+- Zero background CPU usage
+- No framework bloat
 
-Constraints:
-- Windows 11 only
-- Rust (stable, MSVC toolchain)
-- egui for UI
-- Native Windows APIs for brightness
-- Single EXE, optimized for size and startup
-- No background polling
-- No cross-platform abstractions
+Target audience: power users.  
+Tone: system utility, not consumer app.
 
-The project already:
-- Builds and runs
-- Displays an egui window
-- Initializes COM (Step 7 complete)
+---
 
-You must implement **monitor enumeration + brightness control** and wire it to the UI.
+## Technology Constraints (NON-NEGOTIABLE)
+
+- Language: **Rust (stable, MSVC toolchain)**
+- Platform: **Windows 11 only**
+- UI: **Raw Win32 + Direct2D + DirectWrite**
+- APIs: **Dxva2 + DDC/CI**
+- Build: `cargo build --release`
+- Output: **single EXE**
+
+DO NOT use:
+- egui, wgpu, winit
+- WinUI, XAML, MAUI, WPF
+- Qt, GTK
+- Electron / WebView
+- Cross-platform UI crates
+- Async runtimes
 
 ---
 
@@ -26,172 +37,224 @@ You must implement **monitor enumeration + brightness control** and wire it to t
 ```
 
 src/
-├─ main.rs          # egui app + wiring
-├─ win.rs           # COM init (already exists)
-├─ monitors.rs      # monitor discovery + handles
-├─ brightness.rs    # brightness get/set logic
+├─ main.rs              # App entry + message loop
+├─ win.rs               # COM + DPI init
+├─ window.rs            # Win32 window creation
+├─ render.rs            # Direct2D / DirectWrite renderer
+├─ monitors.rs          # Monitor enumeration
+├─ brightness.rs        # Brightness get/set logic
+└─ state.rs             # App state (pure data)
 
 ````
 
 Rules:
-- No logic in `main.rs` except orchestration.
-- No Windows API calls inside egui code.
-- No global mutable state.
-- Cache monitor handles once at startup.
+- UI rendering is stateless; state lives in `state.rs`
+- No global mutable state
+- No polling loops
+- No threads
 
 ---
 
-## Srep 1 to 7 are already complete.
+## Step 1 — Window Creation
 
-## Step 8 — Monitor Enumeration
+Create a **bordered, resizable Win32 window** using:
+- `CreateWindowExW`
+- Standard message loop (`GetMessageW`)
 
-### Goal
-Enumerate all physical monitors and store handles for later brightness control.
+Requirements:
+- Proper DPI awareness (`SetProcessDpiAwarenessContext`)
+- Dark background
+- System title bar (do NOT custom-draw it)
 
-### Requirements
+---
+
+## Step 2 — Rendering Stack
+
+Initialize:
+- `ID2D1Factory`
+- `ID2D1HwndRenderTarget`
+- `IDWriteFactory`
+
+Use:
+- Direct2D for shapes
+- DirectWrite for text
+
+NO GDI rendering except for fallback.
+
+---
+
+## Step 3 — Visual Design Rules
+
+This is NOT subjective.
+
+### Layout
+- Vertical stack
+- Fixed-width content column
+- Consistent spacing: 8 / 16 / 24 px only
+
+### Typography
+- Font: **Segoe UI**
+- Title: 20–22 px
+- Body: 13–14 px
+- Labels: 12 px, subdued color
+
+### Color
+- Background: near-black neutral
+- Foreground: off-white
+- Accent: single muted blue or system accent
+- No gradients
+- No shadows
+
+### Controls
+- Custom-drawn sliders
+- Large hit targets
+- Subtle hover feedback
+- Numeric percentage aligned right
+
+This should resemble **a Windows system utility**, not a “styled app”.
+
+---
+
+## Step 4 — Monitor Enumeration
+
+Implement in `monitors.rs`.
+
 - Use `EnumDisplayMonitors`
-- For each `HMONITOR`, obtain physical monitor handles using:
-  - `GetNumberOfPhysicalMonitorsFromHMONITOR`
-  - `GetPhysicalMonitorsFromHMONITOR`
+- For each `HMONITOR`:
+  - Retrieve physical monitors using:
+    - `GetNumberOfPhysicalMonitorsFromHMONITOR`
+    - `GetPhysicalMonitorsFromHMONITOR`
 - Store:
-  - `HMONITOR`
-  - `HANDLE` to physical monitor
-  - Friendly name (if available)
-
-### Output
-Define a struct:
 ```rust
 pub struct Monitor {
     pub hmonitor: HMONITOR,
     pub physical: HANDLE,
+    pub name: String,
 }
 ````
 
-Provide:
+Enumerate **once at startup**.
 
-```rust
-pub fn enumerate_monitors() -> Vec<Monitor>
-```
-
-### Rules
-
-* Enumeration happens **once**.
-* No polling.
-* Free physical monitor handles on drop.
+Free handles on drop.
 
 ---
 
-## Step 9 — Brightness Control (Core Logic)
+## Step 5 — Brightness Control
 
-### Split logic by display type
+Implement in `brightness.rs`.
 
-#### Internal Displays (Laptop Panels)
-
-Use:
+### Internal displays
 
 * `GetMonitorBrightness`
 * `SetMonitorBrightness`
 
-#### External Displays
+### External displays
 
-Use **DDC/CI**:
+* DDC/CI:
 
-* `GetVCPFeatureAndVCPFeatureReply`
-* `SetVCPFeature`
-* Brightness VCP code: `0x10`
+  * `GetVCPFeatureAndVCPFeatureReply`
+  * `SetVCPFeature`
+  * VCP code `0x10`
 
-### API
-
-In `brightness.rs` define:
+Expose:
 
 ```rust
-pub fn get_brightness(monitor: &Monitor) -> Option<u32>
-pub fn set_brightness(monitor: &Monitor, value: u32) -> bool
+pub fn get_brightness(m: &Monitor) -> Option<u32>
+pub fn set_brightness(m: &Monitor, value: u32) -> bool
 ```
 
-### Rules
+Normalize brightness to **0–100**.
 
-* Brightness range normalized to **0–100**
-* Convert to native ranges internally
-* No WMI unless Dxva2 fails
-* No retries, no loops
+DO NOT poll.
+DO NOT use WMI unless Dxva2 fails.
 
 ---
 
-## Step 10 — UI Wiring (egui)
+## Step 6 — Input Handling
 
-### UI Requirements
+* Mouse:
 
-* Single window
-* One brightness slider per monitor
-* Slider range: 0–100
-* Change brightness **only when slider value changes**
+  * Hit-testing sliders
+  * Click + drag
+* Keyboard:
+
+  * Optional: arrow keys for fine control
+
+Update brightness **only on value change**.
+
+---
+
+## Step 7 — App State
+
+`state.rs` holds:
+
+```rust
+pub struct AppState {
+    pub monitors: Vec<Monitor>,
+    pub brightness: Vec<u32>,
+    pub hot_monitor: Option<usize>,
+}
+```
+
+Rendering reads state.
+Input mutates state.
+Brightness writes are explicit.
+
+---
+
+## Step 8 — Message Loop Rules
+
+* Render only on:
+
+  * `WM_PAINT`
+  * Input events
 * No timers
-* No async
-* No background threads
-
-### Flow
-
-* On app init:
-
-  * Enumerate monitors
-  * Query initial brightness
-* In `update()`:
-
-  * Render sliders
-  * On user change → call `set_brightness`
+* No background redraws
+* CPU usage must be ~0% when idle
 
 ---
 
-## Step 11 — Error Handling Rules
+## Step 9 — Error Handling
 
 * Silent failure is acceptable
-* Do not panic on API failure
-* Log errors only in debug builds
-* Never crash the app due to a bad monitor
+* Never crash due to bad monitor
+* Log only in debug builds
+* No dialogs
+
+This is a utility, not a wizard.
 
 ---
 
-## Step 12 — Build Constraints
+## Step 10 — Binary Optimization
 
-### Cargo.toml (already set, do not modify)
+Ensure:
 
 ```toml
 [profile.release]
-lto = true
+opt-level = "z"
+lto = "fat"
 panic = "abort"
-strip = true
+strip = "symbols"
 codegen-units = 1
 ```
 
-### Target
+Target:
 
-* `cargo build --release`
-* Resulting EXE should be ~1–3 MB
-
----
-
-## Hard Prohibitions
-
-DO NOT:
-
-* Use WMI polling
-* Use background threads
-* Use async runtimes
-* Use WinUI / XAML / MAUI / Avalonia
-* Add cross-platform crates
-* Add configuration files
-* Add telemetry or logging frameworks
+* **< 1 MB EXE**
+* Instant startup
 
 ---
 
 ## Definition of Done
 
-* App launches instantly
-* Sliders adjust brightness correctly
-* External monitors work via DDC/CI
-* Laptop panel works
-* No CPU usage while idle
-* Single EXE, no dependencies
+* Native Windows look
+* External + internal monitors work
+* One slider per monitor
+* No idle CPU usage
+* No background threads
+* No runtime dependencies
+* Professional, restrained UI
 
-The compiler is the authority.
+If anything feels “framework-like”, it is wrong.
+
+The compiler and Windows APIs are the only authorities.

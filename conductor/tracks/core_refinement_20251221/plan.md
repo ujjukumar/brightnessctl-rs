@@ -1,9 +1,9 @@
 # Plan: Refine Core Implementation
 
 ## Phase 1: Foundational Infrastructure
-- [ ] Task: Complete Win32 Window Class registration and DPI awareness initialization in `win.rs` and `window.rs`.
-- [ ] Task: Implement robust monitor enumeration in `monitors.rs` using `EnumDisplayMonitors` and `GetPhysicalMonitorsFromHMONITOR`.
-- [ ] Task: Conductor - User Manual Verification 'Foundational Infrastructure' (Protocol in workflow.md)
+- [x] Task: Complete Win32 Window Class registration and DPI awareness initialization in `win.rs` and `window.rs`.
+- [x] Task: Implement robust monitor enumeration in `monitors.rs` using `EnumDisplayMonitors` and `GetPhysicalMonitorsFromHMONITOR`.
+- [x] Task: Conductor - User Manual Verification 'Foundational Infrastructure' (Protocol in workflow.md)
 
 ## Phase 2: Rendering Engine
 - [ ] Task: Initialize Direct2D and DirectWrite factories in `render.rs`.
