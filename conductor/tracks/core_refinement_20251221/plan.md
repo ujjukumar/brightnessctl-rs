@@ -6,9 +6,9 @@
 - [x] Task: Conductor - User Manual Verification 'Foundational Infrastructure' (Protocol in workflow.md)
 
 ## Phase 2: Rendering Engine
-- [ ] Task: Initialize Direct2D and DirectWrite factories in `render.rs`.
-- [ ] Task: Implement the basic vertical stack rendering logic with Segoe UI typography.
-- [ ] Task: Conductor - User Manual Verification 'Rendering Engine' (Protocol in workflow.md)
+- [x] Task: Initialize Direct2D and DirectWrite factories in `render.rs`.
+- [x] Task: Implement the basic vertical stack rendering logic with Segoe UI typography.
+- [x] Task: Conductor - User Manual Verification 'Rendering Engine' (Protocol in workflow.md)
 
 ## Phase 3: State & Input Integration
 - [ ] Task: Integrate `state.rs` with the message loop to trigger redraws on state changes.

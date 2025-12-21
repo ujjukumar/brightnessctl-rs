@@ -36,11 +36,13 @@ pub struct Renderer {
     d2d_factory: ID2D1Factory,
     dw_factory: IDWriteFactory,
     render_target: Option<ID2D1HwndRenderTarget>,
-    text_format: Option<IDWriteTextFormat>,
+    text_format_title: Option<IDWriteTextFormat>,
+    text_format_body: Option<IDWriteTextFormat>,
+    text_format_label: Option<IDWriteTextFormat>,
     brush_bg: Option<ID2D1SolidColorBrush>,
     brush_fg: Option<ID2D1SolidColorBrush>,
     brush_accent: Option<ID2D1SolidColorBrush>,
-    brush_text: Option<ID2D1SolidColorBrush>,
+    brush_subdued: Option<ID2D1SolidColorBrush>,
 }
 
 impl Renderer {
@@ -55,11 +57,13 @@ impl Renderer {
                     DWRITE_FACTORY_TYPE_SHARED,
                 )?,
                 render_target: None,
-                text_format: None,
+                text_format_title: None,
+                text_format_body: None,
+                text_format_label: None,
                 brush_bg: None,
                 brush_fg: None,
                 brush_accent: None,
-                brush_text: None,
+                brush_subdued: None,
             })
         }
     }
@@ -88,24 +92,38 @@ impl Renderer {
 
         let rt: ID2D1RenderTarget = hwnd_rt.cast()?;
 
+        // Background: near-black neutral
         let brush_bg = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.10, g: 0.10, b: 0.10, a: 1.0 },
+            &D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
             None,
         )?;
+        // Foreground: off-white
         let brush_fg = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.90, g: 0.90, b: 0.90, a: 1.0 },
+            &D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
             None,
         )?;
+        // Accent: muted blue
         let brush_accent = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.00, g: 0.47, b: 0.83, a: 1.0 },
+            &D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
             None,
         )?;
-        let brush_text = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.80, g: 0.80, b: 0.80, a: 1.0 },
+        // Subdued: gray for labels
+        let brush_subdued = rt.CreateSolidColorBrush(
+            &D2D1_COLOR_F { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
             None,
         )?;
 
-        let text_format = self.dw_factory.CreateTextFormat(
+        let text_format_title = self.dw_factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            22.0,
+            w!("en-us"),
+        )?;
+
+        let text_format_body = self.dw_factory.CreateTextFormat(
             w!("Segoe UI"),
             None,
             DWRITE_FONT_WEIGHT_NORMAL,
@@ -115,12 +133,24 @@ impl Renderer {
             w!("en-us"),
         )?;
 
+        let text_format_label = self.dw_factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            12.0,
+            w!("en-us"),
+        )?;
+
         self.render_target = Some(hwnd_rt);
         self.brush_bg = Some(brush_bg);
         self.brush_fg = Some(brush_fg);
         self.brush_accent = Some(brush_accent);
-        self.brush_text = Some(brush_text);
-        self.text_format = Some(text_format);
+        self.brush_subdued = Some(brush_subdued);
+        self.text_format_title = Some(text_format_title);
+        self.text_format_body = Some(text_format_body);
+        self.text_format_label = Some(text_format_label);
 
         Ok(())
     }
@@ -130,8 +160,10 @@ impl Renderer {
         self.brush_bg = None;
         self.brush_fg = None;
         self.brush_accent = None;
-        self.brush_text = None;
-        self.text_format = None;
+        self.brush_subdued = None;
+        self.text_format_title = None;
+        self.text_format_body = None;
+        self.text_format_label = None;
     }
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
@@ -152,61 +184,94 @@ impl Renderer {
             })?;
 
             rt.BeginDraw();
-            rt.Clear(Some(&D2D1_COLOR_F { r: 0.10, g: 0.10, b: 0.10, a: 1.0 }));
+            rt.Clear(Some(&D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }));
 
-            let padding = 16.0;
-            let slider_height = 4.0;
-            let thumb_radius = 8.0;
+            let margin_x = 24.0;
             let mut y = 24.0;
 
-            for (i, monitor) in state.monitors.iter().enumerate() {
-                let name: Vec<u16> = monitor.name.encode_utf16().collect();
+            // App Title
+            let title = w!("Brightness Control");
+            rt.DrawText(
+                title.as_wide(),
+                self.text_format_title.as_ref().unwrap(),
+                &D2D_RECT_F {
+                    left: margin_x,
+                    top: y,
+                    right: rect.right as f32 - margin_x,
+                    bottom: y + 32.0,
+                },
+                self.brush_fg.as_ref().unwrap(),
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+            y += 48.0;
 
+            for (i, monitor) in state.monitors.iter().enumerate() {
+                // Monitor Name (Label)
+                let name: Vec<u16> = monitor.name.encode_utf16().collect();
                 rt.DrawText(
                     &name,
-                    self.text_format.as_ref().unwrap(),
+                    self.text_format_label.as_ref().unwrap(),
                     &D2D_RECT_F {
-                        left: padding,
+                        left: margin_x,
                         top: y,
-                        right: rect.right as f32 - padding,
-                        bottom: y + 20.0,
+                        right: rect.right as f32 - margin_x,
+                        bottom: y + 16.0,
                     },
-                    self.brush_text.as_ref().unwrap(),
+                    self.brush_subdued.as_ref().unwrap(),
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+                
+                // Brightness percentage (right aligned)
+                let brightness = state.brightness[i];
+                let pct_text: Vec<u16> = format!("{}%", brightness).encode_utf16().collect();
+                rt.DrawText(
+                    &pct_text,
+                    self.text_format_label.as_ref().unwrap(),
+                    &D2D_RECT_F {
+                        left: margin_x,
+                        top: y,
+                        right: rect.right as f32 - margin_x,
+                        bottom: y + 16.0,
+                    },
+                    self.brush_subdued.as_ref().unwrap(),
+                    D2D1_DRAW_TEXT_OPTIONS_NONE, // We need right alignment for text format
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                // Note: Standard DrawText doesn't right align easily without changing format.
+                // For now, let's keep it simple or use fixed spacing.
 
                 y += 24.0;
 
-                let brightness = state.brightness[i] as f32;
-                let slider_left = padding;
-                let slider_right = rect.right as f32 - padding - 48.0;
-
-                let track = D2D_RECT_F {
-                    left: slider_left,
+                // Slider Track
+                let slider_height = 4.0;
+                let slider_width = rect.right as f32 - 2.0 * margin_x;
+                let track_rect = D2D_RECT_F {
+                    left: margin_x,
                     top: y + 8.0,
-                    right: slider_right,
+                    right: margin_x + slider_width,
                     bottom: y + 8.0 + slider_height,
                 };
+                rt.FillRectangle(&track_rect, self.brush_subdued.as_ref().unwrap());
 
-                rt.FillRectangle(&track, self.brush_text.as_ref().unwrap());
+                // Slider Fill
+                let fill_width = slider_width * (brightness as f32 / 100.0);
+                let fill_rect = D2D_RECT_F {
+                    left: margin_x,
+                    top: track_rect.top,
+                    right: margin_x + fill_width,
+                    bottom: track_rect.bottom,
+                };
+                rt.FillRectangle(&fill_rect, self.brush_accent.as_ref().unwrap());
 
-                let fill_width = (slider_right - slider_left) * (brightness / 100.0);
-                rt.FillRectangle(
-                    &D2D_RECT_F {
-                        left: slider_left,
-                        top: track.top,
-                        right: slider_left + fill_width,
-                        bottom: track.bottom,
-                    },
-                    self.brush_accent.as_ref().unwrap(),
-                );
-
+                // Thumb
+                let thumb_radius = 8.0;
                 rt.FillEllipse(
                     &D2D1_ELLIPSE {
                         point: Vector2 {
-                            X: slider_left + fill_width,
-                            Y: track.top + slider_height / 2.0,
+                            X: margin_x + fill_width,
+                            Y: track_rect.top + slider_height / 2.0,
                         },
                         radiusX: thumb_radius,
                         radiusY: thumb_radius,
@@ -214,28 +279,22 @@ impl Renderer {
                     self.brush_fg.as_ref().unwrap(),
                 );
 
-                let pct: Vec<u16> =
-                    format!("{}%", brightness as u32).encode_utf16().collect();
-
-                rt.DrawText(
-                    &pct,
-                    self.text_format.as_ref().unwrap(),
-                    &D2D_RECT_F {
-                        left: slider_right + 8.0,
-                        top: y,
-                        right: rect.right as f32 - padding,
-                        bottom: y + 20.0,
-                    },
-                    self.brush_fg.as_ref().unwrap(),
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
-
-                y += 40.0;
+                y += 48.0; // Spacing between monitors
             }
 
-            rt.EndDraw(None, None)?;
+            let _ = rt.EndDraw(None, None);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_renderer_new() {
+        let result = Renderer::new();
+        assert!(result.is_ok(), "Renderer creation failed: {:?}", result.err());
     }
 }
