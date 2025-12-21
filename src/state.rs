@@ -1,10 +1,8 @@
-use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Devices::Display::{DestroyPhysicalMonitors, PHYSICAL_MONITOR};
 
 #[derive(Debug)]
 pub struct Monitor {
-    pub hmonitor: HMONITOR,
     pub physical: HANDLE,
     pub name: String,
 }
@@ -29,5 +27,4 @@ unsafe impl Sync for Monitor {}
 pub struct AppState {
     pub monitors: Vec<Monitor>,
     pub brightness: Vec<u32>,
-    pub hot_monitor: Option<usize>,
 }

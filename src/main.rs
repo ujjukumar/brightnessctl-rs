@@ -46,7 +46,6 @@ fn main() -> Result<()> {
         APP_STATE = Some(AppState {
             monitors,
             brightness: initial_brightness,
-            hot_monitor: None,
         });
 
         RENDERER = Some(render::Renderer::new()?);

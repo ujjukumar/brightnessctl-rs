@@ -28,7 +28,6 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
                 for pm in physical_monitors {
                     let desc = pm.szPhysicalMonitorDescription;
                     monitors.push(Monitor {
-                        hmonitor,
                         physical: pm.hPhysicalMonitor,
                         name: String::from_utf16_lossy(&desc).trim_matches('\0').to_string(),
                     });
