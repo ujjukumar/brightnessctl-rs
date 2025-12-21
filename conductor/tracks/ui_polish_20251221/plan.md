@@ -23,16 +23,16 @@
     - [x] Update `AppState` to reflect the active theme colors. a1253bd
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md) a1253bd
 
-## Phase 3: Responsive Layout & Status Bar
+## Phase 3: Responsive Layout & Status Bar [checkpoint: 8d0fc46]
 
-- [x] Task: Implement Responsive Rendering
-    - [x] Refactor `render.rs` to calculate layout dynamically based on current window `RECT`.
-    - [x] Ensure sliders and labels stretch or align correctly on resize.
-- [x] Task: Implement Status Bar
-    - [x] Add `status_message` field to `AppState`.
-    - [x] Update `render.rs` to draw a dedicated status bar area at the bottom.
-    - [x] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps).
-- [x] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md)
+- [x] Task: Implement Responsive Rendering 8d0fc46
+    - [x] Refactor `render.rs` to calculate layout dynamically based on current window `RECT`. 8d0fc46
+    - [x] Ensure sliders and labels stretch or align correctly on resize. 8d0fc46
+- [x] Task: Implement Status Bar 8d0fc46
+    - [x] Add `status_message` field to `AppState`. 8d0fc46
+    - [x] Update `render.rs` to draw a dedicated status bar area at the bottom. 8d0fc46
+    - [x] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps). 8d0fc46
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md) 8d0fc46
 
 ## Phase 4: Custom Polished Controls & Interaction
 
