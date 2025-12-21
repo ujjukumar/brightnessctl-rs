@@ -34,16 +34,16 @@
     - [x] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps). 8d0fc46
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md) 8d0fc46
 
-## Phase 4: Custom Polished Controls & Interaction
+## Phase 4: Custom Polished Controls & Interaction [checkpoint: 248cf66]
 
-- [x] Task: Enhance Sliders with State Awareness
-    - [ ] Update `AppState` or a new input state to track "Hovered" and "Active" monitor indices.
-    - [ ] Update `main.rs` (`WM_MOUSEMOVE`, `WM_MOUSELEAVE`) to track which slider is hovered.
-    - [ ] Update `render.rs` to draw sliders differently based on their state (Normal, Hover, Dragging).
-- [x] Task: Implement Visual Polish & Transitions
-    - [ ] Add subtle color interpolation for hover states (smooth transitions).
-    - [ ] Refine Segoe UI typography and spacing (8/16/24px grid) across all elements.
-- [x] Task: Final Verification & Optimization
-    - [ ] Run `cargo check` and `cargo test` to ensure stability.
-    - [ ] Profile release build to confirm <1MB size and instant startup.
-- [x] Task: Conductor - User Manual Verification 'Phase 4: Custom Polished Controls & Interaction' (Protocol in workflow.md)
+- [x] Task: Enhance Sliders with State Awareness 248cf66
+    - [x] Update `AppState` or a new input state to track "Hovered" and "Active" monitor indices. 248cf66
+    - [x] Update `main.rs` (`WM_MOUSEMOVE`, `WM_MOUSELEAVE`) to track which slider is hovered. 248cf66
+    - [x] Update `render.rs` to draw sliders differently based on their state (Normal, Hover, Dragging). 248cf66
+- [x] Task: Implement Visual Polish & Transitions 248cf66
+    - [x] Add subtle color interpolation for hover states (smooth transitions). 248cf66
+    - [x] Refine Segoe UI typography and spacing (8/16/24px grid) across all elements. 248cf66
+- [x] Task: Final Verification & Optimization 248cf66
+    - [x] Run `cargo check` and `cargo test` to ensure stability. 248cf66
+    - [x] Profile release build to confirm <1MB size and instant startup. 248cf66
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Custom Polished Controls & Interaction' (Protocol in workflow.md) 248cf66
