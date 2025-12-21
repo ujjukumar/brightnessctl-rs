@@ -1,15 +1,15 @@
 # Plan: UI Polish & Feature Expansion
 
-## Phase 1: Settings & Persistence
+## Phase 1: Settings & Persistence [checkpoint: f752d03]
 
-- [x] Task: Implement Settings infrastructure
-    - [x] Create `src/settings.rs` to handle JSON serialization/deserialization of `Settings` struct (Theme preference, last window size, etc.).
-    - [x] Update `AppState` in `src/state.rs` to include a `Settings` instance.
-    - [x] Write tests for settings loading/saving to ensure portability.
-- [x] Task: Integrate Settings with Application Startup
-    - [x] Update `main.rs` to load settings on boot.
-    - [x] Ensure the application creates a default `brightnessctl.json` if none exists.
-- [x] Task: Conductor - User Manual Verification 'Phase 1: Settings & Persistence' (Protocol in workflow.md)
+- [x] Task: Implement Settings infrastructure f752d03
+    - [x] Create `src/settings.rs` to handle JSON serialization/deserialization of `Settings` struct (Theme preference, last window size, etc.). f752d03
+    - [x] Update `AppState` in `src/state.rs` to include a `Settings` instance. f752d03
+    - [x] Write tests for settings loading/saving to ensure portability. f752d03
+- [x] Task: Integrate Settings with Application Startup f752d03
+    - [x] Update `main.rs` to load settings on boot. f752d03
+    - [x] Ensure the application creates a default `brightnessctl.json` if none exists. f752d03
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Settings & Persistence' (Protocol in workflow.md) f752d03
 
 ## Phase 2: Native Menu Bar & Theming Logic
 
