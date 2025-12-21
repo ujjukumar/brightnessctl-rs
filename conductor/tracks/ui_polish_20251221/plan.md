@@ -11,17 +11,17 @@
     - [x] Ensure the application creates a default `brightnessctl.json` if none exists. f752d03
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Settings & Persistence' (Protocol in workflow.md) f752d03
 
-## Phase 2: Native Menu Bar & Theming Logic
+## Phase 2: Native Menu Bar & Theming Logic [checkpoint: a1253bd]
 
-- [x] Task: Implement Native Win32 Menu
-    - [ ] Create menu resources/logic in `src/window.rs` or a new `src/menu.rs`.
-    - [ ] Add menu items for File, View, Theme (Auto/Light/Dark), and Help.
-    - [ ] Handle `WM_COMMAND` in `wnd_proc` to react to menu selections.
-- [x] Task: Implement Theming Engine
-    - [ ] Define `ColorPalette` for Light and Dark modes in `src/render.rs` or `src/state.rs`.
-    - [ ] Implement system theme detection (Auto mode) using Windows registry or APIs.
-    - [ ] Update `AppState` to reflect the active theme colors.
-- [x] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md)
+- [x] Task: Implement Native Win32 Menu a1253bd
+    - [x] Create menu resources/logic in `src/window.rs` or a new `src/menu.rs`. a1253bd
+    - [x] Add menu items for File, View, Theme (Auto/Light/Dark), and Help. a1253bd
+    - [x] Handle `WM_COMMAND` in `wnd_proc` to react to menu selections. a1253bd
+- [x] Task: Implement Theming Engine a1253bd
+    - [x] Define `ColorPalette` for Light and Dark modes in `src/render.rs` or `src/state.rs`. a1253bd
+    - [x] Implement system theme detection (Auto mode) using Windows registry or APIs. a1253bd
+    - [x] Update `AppState` to reflect the active theme colors. a1253bd
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md) a1253bd
 
 ## Phase 3: Responsive Layout & Status Bar
 
