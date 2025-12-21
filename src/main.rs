@@ -7,6 +7,7 @@ mod monitors;
 mod brightness;
 mod state;
 mod render;
+mod settings;
 
 use crate::state::AppState;
 
@@ -19,6 +20,8 @@ use windows::{
     Win32::System::SystemServices::MK_LBUTTON,
     Win32::System::LibraryLoader::GetModuleHandleW,
 };
+
+use crate::settings::Settings;
 
 static mut APP_STATE: Option<AppState> = None;
 static mut RENDERER: Option<render::Renderer> = None;
@@ -42,10 +45,13 @@ fn main() -> Result<()> {
                 initial_brightness.push(50); // Default if read fails
             }
         }
+        
+        let settings = Settings::load();
 
         APP_STATE = Some(AppState {
             monitors,
             brightness: initial_brightness,
+            settings,
         });
 
         RENDERER = Some(render::Renderer::new()?);

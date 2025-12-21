@@ -23,8 +23,11 @@ impl Drop for Monitor {
 unsafe impl Send for Monitor {}
 unsafe impl Sync for Monitor {}
 
+use crate::settings::Settings;
+
 #[derive(Default)]
 pub struct AppState {
     pub monitors: Vec<Monitor>,
     pub brightness: Vec<u32>,
+    pub settings: Settings,
 }

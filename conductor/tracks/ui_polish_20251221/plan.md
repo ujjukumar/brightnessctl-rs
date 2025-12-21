@@ -1,0 +1,49 @@
+# Plan: UI Polish & Feature Expansion
+
+## Phase 1: Settings & Persistence
+
+- [x] Task: Implement Settings infrastructure
+    - [x] Create `src/settings.rs` to handle JSON serialization/deserialization of `Settings` struct (Theme preference, last window size, etc.).
+    - [x] Update `AppState` in `src/state.rs` to include a `Settings` instance.
+    - [x] Write tests for settings loading/saving to ensure portability.
+- [x] Task: Integrate Settings with Application Startup
+    - [x] Update `main.rs` to load settings on boot.
+    - [x] Ensure the application creates a default `brightnessctl.json` if none exists.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Settings & Persistence' (Protocol in workflow.md)
+
+## Phase 2: Native Menu Bar & Theming Logic
+
+- [ ] Task: Implement Native Win32 Menu
+    - [ ] Create menu resources/logic in `src/window.rs` or a new `src/menu.rs`.
+    - [ ] Add menu items for File, View, Theme (Auto/Light/Dark), and Help.
+    - [ ] Handle `WM_COMMAND` in `wnd_proc` to react to menu selections.
+- [ ] Task: Implement Theming Engine
+    - [ ] Define `ColorPalette` for Light and Dark modes in `src/render.rs` or `src/state.rs`.
+    - [ ] Implement system theme detection (Auto mode) using Windows registry or APIs.
+    - [ ] Update `AppState` to reflect the active theme colors.
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md)
+
+## Phase 3: Responsive Layout & Status Bar
+
+- [ ] Task: Implement Responsive Rendering
+    - [ ] Refactor `render.rs` to calculate layout dynamically based on current window `RECT`.
+    - [ ] Ensure sliders and labels stretch or align correctly on resize.
+- [ ] Task: Implement Status Bar
+    - [ ] Add `status_message` field to `AppState`.
+    - [ ] Update `render.rs` to draw a dedicated status bar area at the bottom.
+    - [ ] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps).
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md)
+
+## Phase 4: Custom Polished Controls & Interaction
+
+- [ ] Task: Enhance Sliders with State Awareness
+    - [ ] Update `AppState` or a new input state to track "Hovered" and "Active" monitor indices.
+    - [ ] Update `main.rs` (`WM_MOUSEMOVE`, `WM_MOUSELEAVE`) to track which slider is hovered.
+    - [ ] Update `render.rs` to draw sliders differently based on their state (Normal, Hover, Dragging).
+- [ ] Task: Implement Visual Polish & Transitions
+    - [ ] Add subtle color interpolation for hover states (smooth transitions).
+    - [ ] Refine Segoe UI typography and spacing (8/16/24px grid) across all elements.
+- [ ] Task: Final Verification & Optimization
+    - [ ] Run `cargo check` and `cargo test` to ensure stability.
+    - [ ] Profile release build to confirm <1MB size and instant startup.
+- [ ] Task: Conductor - User Manual Verification 'Phase 4: Custom Polished Controls & Interaction' (Protocol in workflow.md)
