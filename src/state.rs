@@ -31,4 +31,6 @@ pub struct AppState {
     pub brightness: Vec<u32>,
     pub settings: Settings,
     pub status_message: String,
+    pub hover_monitor_idx: Option<usize>,
+    pub active_monitor_idx: Option<usize>,
 }

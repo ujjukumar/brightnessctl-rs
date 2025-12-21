@@ -287,7 +287,17 @@ impl Renderer {
                     right: margin_x + slider_width,
                     bottom: y + 8.0 + slider_height,
                 };
-                rt.FillRectangle(&track_rect, self.brush_subdued.as_ref().unwrap());
+                
+                let is_hovered = state.hover_monitor_idx == Some(i);
+                let is_active = state.active_monitor_idx == Some(i);
+
+                let track_color = if is_hovered || is_active {
+                    D2D1_COLOR_F { r: palette.subdued.r + 0.1, g: palette.subdued.g + 0.1, b: palette.subdued.b + 0.1, a: 1.0 }
+                } else {
+                    palette.subdued
+                };
+                let track_brush = rt.CreateSolidColorBrush(&track_color, None)?;
+                rt.FillRectangle(&track_rect, &track_brush);
 
                 // Slider Fill
                 let fill_width = slider_width * (brightness as f32 / 100.0);
@@ -297,10 +307,17 @@ impl Renderer {
                     right: margin_x + fill_width,
                     bottom: track_rect.bottom,
                 };
-                rt.FillRectangle(&fill_rect, self.brush_accent.as_ref().unwrap());
+                
+                let accent_color = if is_active {
+                     D2D1_COLOR_F { r: palette.accent.r + 0.1, g: palette.accent.g + 0.1, b: palette.accent.b + 0.1, a: 1.0 }
+                } else {
+                     palette.accent
+                };
+                let accent_brush = rt.CreateSolidColorBrush(&accent_color, None)?;
+                rt.FillRectangle(&fill_rect, &accent_brush);
 
                 // Thumb
-                let thumb_radius = 8.0;
+                let thumb_radius = if is_active { 10.0 } else if is_hovered { 9.0 } else { 8.0 };
                 rt.FillEllipse(
                     &D2D1_ELLIPSE {
                         point: Vector2 {

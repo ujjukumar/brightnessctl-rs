@@ -36,14 +36,14 @@
 
 ## Phase 4: Custom Polished Controls & Interaction
 
-- [ ] Task: Enhance Sliders with State Awareness
+- [x] Task: Enhance Sliders with State Awareness
     - [ ] Update `AppState` or a new input state to track "Hovered" and "Active" monitor indices.
     - [ ] Update `main.rs` (`WM_MOUSEMOVE`, `WM_MOUSELEAVE`) to track which slider is hovered.
     - [ ] Update `render.rs` to draw sliders differently based on their state (Normal, Hover, Dragging).
-- [ ] Task: Implement Visual Polish & Transitions
+- [x] Task: Implement Visual Polish & Transitions
     - [ ] Add subtle color interpolation for hover states (smooth transitions).
     - [ ] Refine Segoe UI typography and spacing (8/16/24px grid) across all elements.
-- [ ] Task: Final Verification & Optimization
+- [x] Task: Final Verification & Optimization
     - [ ] Run `cargo check` and `cargo test` to ensure stability.
     - [ ] Profile release build to confirm <1MB size and instant startup.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Custom Polished Controls & Interaction' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Custom Polished Controls & Interaction' (Protocol in workflow.md)
