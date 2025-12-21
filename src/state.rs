@@ -30,4 +30,5 @@ pub struct AppState {
     pub monitors: Vec<Monitor>,
     pub brightness: Vec<u32>,
     pub settings: Settings,
+    pub status_message: String,
 }

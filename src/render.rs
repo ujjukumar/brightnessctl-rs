@@ -251,7 +251,7 @@ impl Renderer {
                     &D2D_RECT_F {
                         left: margin_x,
                         top: y,
-                        right: rect.right as f32 - margin_x,
+                        right: rect.right as f32 - margin_x - 60.0, // Space for percentage
                         bottom: y + 16.0,
                     },
                     self.brush_subdued.as_ref().unwrap(),
@@ -266,17 +266,15 @@ impl Renderer {
                     &pct_text,
                     self.text_format_label.as_ref().unwrap(),
                     &D2D_RECT_F {
-                        left: margin_x,
+                        left: rect.right as f32 - margin_x - 60.0,
                         top: y,
                         right: rect.right as f32 - margin_x,
                         bottom: y + 16.0,
                     },
                     self.brush_subdued.as_ref().unwrap(),
-                    D2D1_DRAW_TEXT_OPTIONS_NONE, // We need right alignment for text format
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
-                // Note: Standard DrawText doesn't right align easily without changing format.
-                // For now, let's keep it simple or use fixed spacing.
 
                 y += 24.0;
 
@@ -316,6 +314,41 @@ impl Renderer {
                 );
 
                 y += 48.0; // Spacing between monitors
+            }
+
+            // Status Bar at the bottom
+            let status_bar_height = 24.0;
+            let status_rect = D2D_RECT_F {
+                left: 0.0,
+                top: rect.bottom as f32 - status_bar_height,
+                right: rect.right as f32,
+                bottom: rect.bottom as f32,
+            };
+            
+            // Subtle separator line
+            rt.DrawLine(
+                Vector2 { X: 0.0, Y: status_rect.top },
+                Vector2 { X: rect.right as f32, Y: status_rect.top },
+                self.brush_subdued.as_ref().unwrap(),
+                1.0,
+                None,
+            );
+
+            if !state.status_message.is_empty() {
+                let status_text: Vec<u16> = state.status_message.encode_utf16().collect();
+                rt.DrawText(
+                    &status_text,
+                    self.text_format_label.as_ref().unwrap(),
+                    &D2D_RECT_F {
+                        left: 8.0,
+                        top: status_rect.top + 4.0,
+                        right: rect.right as f32 - 8.0,
+                        bottom: status_rect.bottom,
+                    },
+                    self.brush_subdued.as_ref().unwrap(),
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
             }
 
             let _ = rt.EndDraw(None, None);

@@ -53,6 +53,7 @@ fn main() -> Result<()> {
             monitors,
             brightness: initial_brightness,
             settings,
+            status_message: "Ready".to_string(),
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -91,6 +92,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                                     state.brightness.push(50);
                                 }
                             }
+                            state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
@@ -98,6 +100,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Auto;
                             let _ = state.settings.save();
+                            state.status_message = "Theme set to Auto".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
@@ -105,6 +108,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Light;
                             let _ = state.settings.save();
+                            state.status_message = "Theme set to Light".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
@@ -112,6 +116,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Dark;
                             let _ = state.settings.save();
+                            state.status_message = "Theme set to Dark".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }

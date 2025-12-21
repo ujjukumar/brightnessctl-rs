@@ -25,14 +25,14 @@
 
 ## Phase 3: Responsive Layout & Status Bar
 
-- [ ] Task: Implement Responsive Rendering
-    - [ ] Refactor `render.rs` to calculate layout dynamically based on current window `RECT`.
-    - [ ] Ensure sliders and labels stretch or align correctly on resize.
-- [ ] Task: Implement Status Bar
-    - [ ] Add `status_message` field to `AppState`.
-    - [ ] Update `render.rs` to draw a dedicated status bar area at the bottom.
-    - [ ] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps).
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md)
+- [x] Task: Implement Responsive Rendering
+    - [x] Refactor `render.rs` to calculate layout dynamically based on current window `RECT`.
+    - [x] Ensure sliders and labels stretch or align correctly on resize.
+- [x] Task: Implement Status Bar
+    - [x] Add `status_message` field to `AppState`.
+    - [x] Update `render.rs` to draw a dedicated status bar area at the bottom.
+    - [x] Implement a basic "Status Manager" to clear messages after a timeout (if feasible without timers/threads, perhaps via message loop timestamps).
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Responsive Layout & Status Bar' (Protocol in workflow.md)
 
 ## Phase 4: Custom Polished Controls & Interaction
 
