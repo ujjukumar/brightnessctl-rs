@@ -8,6 +8,7 @@ mod brightness;
 mod state;
 mod render;
 mod settings;
+mod menu;
 
 use crate::state::AppState;
 
@@ -57,7 +58,8 @@ fn main() -> Result<()> {
         RENDERER = Some(render::Renderer::new()?);
 
         let instance = GetModuleHandleW(None)?.into();
-        let _hwnd = window::create(instance, "Brightness Control", Some(wnd_proc))?;
+        let hmenu = menu::create_menu_bar()?;
+        let _hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -72,6 +74,59 @@ fn main() -> Result<()> {
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xffff) as u16;
+                match id {
+                    menu::IDM_EXIT => {
+                        let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    menu::IDM_REFRESH => {
+                        if let Some(state) = APP_STATE.as_mut() {
+                            state.monitors = monitors::enumerate_monitors();
+                            state.brightness.clear();
+                            for m in &state.monitors {
+                                if let Some(b) = brightness::get_brightness(m) {
+                                    state.brightness.push(b);
+                                } else {
+                                    state.brightness.push(50);
+                                }
+                            }
+                            let _ = InvalidateRect(Some(window), None, false);
+                        }
+                    }
+                    menu::IDM_THEME_AUTO => {
+                        if let Some(state) = APP_STATE.as_mut() {
+                            state.settings.theme = crate::settings::ThemeMode::Auto;
+                            let _ = state.settings.save();
+                            let _ = InvalidateRect(Some(window), None, false);
+                        }
+                    }
+                    menu::IDM_THEME_LIGHT => {
+                        if let Some(state) = APP_STATE.as_mut() {
+                            state.settings.theme = crate::settings::ThemeMode::Light;
+                            let _ = state.settings.save();
+                            let _ = InvalidateRect(Some(window), None, false);
+                        }
+                    }
+                    menu::IDM_THEME_DARK => {
+                        if let Some(state) = APP_STATE.as_mut() {
+                            state.settings.theme = crate::settings::ThemeMode::Dark;
+                            let _ = state.settings.save();
+                            let _ = InvalidateRect(Some(window), None, false);
+                        }
+                    }
+                    menu::IDM_ABOUT => {
+                        let _ = MessageBoxW(
+                            Some(window),
+                            w!("Brightness Control v0.1.0\nA native Windows 11 utility."),
+                            w!("About"),
+                            MB_OK | MB_ICONINFORMATION,
+                        );
+                    }
+                    _ => {}
+                }
+                LRESULT(0)
+            }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(window, &mut ps);

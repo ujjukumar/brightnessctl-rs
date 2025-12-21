@@ -8,7 +8,8 @@ use windows::{
 pub unsafe fn create(
     instance: HINSTANCE, 
     title: &str, 
-    wnd_proc: WNDPROC
+    wnd_proc: WNDPROC,
+    menu: Option<HMENU>,
 ) -> Result<HWND> {
     let class_name = w!("BrightnessCtlWindow");
     
@@ -45,7 +46,7 @@ pub unsafe fn create(
         400,
         600,
         None,
-        None,
+        menu,
         Some(instance),
         None,
     )?;
@@ -70,7 +71,7 @@ mod tests {
     fn test_window_creation() {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
-            let result = create(instance, "Test Window", Some(test_wndproc));
+            let result = create(instance, "Test Window", Some(test_wndproc), None);
             assert!(result.is_ok(), "Window creation failed: {:?}", result.err());
             let hwnd = result.unwrap();
             assert!(!hwnd.0.is_null());

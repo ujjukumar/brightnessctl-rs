@@ -13,15 +13,15 @@
 
 ## Phase 2: Native Menu Bar & Theming Logic
 
-- [ ] Task: Implement Native Win32 Menu
+- [x] Task: Implement Native Win32 Menu
     - [ ] Create menu resources/logic in `src/window.rs` or a new `src/menu.rs`.
     - [ ] Add menu items for File, View, Theme (Auto/Light/Dark), and Help.
     - [ ] Handle `WM_COMMAND` in `wnd_proc` to react to menu selections.
-- [ ] Task: Implement Theming Engine
+- [x] Task: Implement Theming Engine
     - [ ] Define `ColorPalette` for Light and Dark modes in `src/render.rs` or `src/state.rs`.
     - [ ] Implement system theme detection (Auto mode) using Windows registry or APIs.
     - [ ] Update `AppState` to reflect the active theme colors.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Native Menu Bar & Theming Logic' (Protocol in workflow.md)
 
 ## Phase 3: Responsive Layout & Status Bar
 

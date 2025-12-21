@@ -32,6 +32,33 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 
+pub struct ColorPalette {
+    pub bg: D2D1_COLOR_F,
+    pub fg: D2D1_COLOR_F,
+    pub accent: D2D1_COLOR_F,
+    pub subdued: D2D1_COLOR_F,
+}
+
+impl ColorPalette {
+    pub fn dark() -> Self {
+        Self {
+            bg: D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
+            fg: D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
+            accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
+            subdued: D2D1_COLOR_F { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            bg: D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
+            fg: D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
+            accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
+            subdued: D2D1_COLOR_F { r: 0.4, g: 0.4, b: 0.4, a: 1.0 },
+        }
+    }
+}
+
 pub struct Renderer {
     d2d_factory: ID2D1Factory,
     dw_factory: IDWriteFactory,
@@ -43,6 +70,7 @@ pub struct Renderer {
     brush_fg: Option<ID2D1SolidColorBrush>,
     brush_accent: Option<ID2D1SolidColorBrush>,
     brush_subdued: Option<ID2D1SolidColorBrush>,
+    current_theme_is_dark: Option<bool>,
 }
 
 impl Renderer {
@@ -64,94 +92,98 @@ impl Renderer {
                 brush_fg: None,
                 brush_accent: None,
                 brush_subdued: None,
+                current_theme_is_dark: None,
             })
         }
     }
 
-    unsafe fn create_resources(&mut self, hwnd: HWND) -> Result<()> {
-        if self.render_target.is_some() {
+    unsafe fn create_resources(&mut self, hwnd: HWND, is_dark: bool) -> Result<()> {
+        if self.render_target.is_some() && self.current_theme_is_dark == Some(is_dark) {
             return Ok(());
         }
 
-        let mut rect = RECT::default();
-        GetClientRect(hwnd, &mut rect)?;
+        // If theme changed, we need to re-create brushes even if RT exists
+        if self.current_theme_is_dark != Some(is_dark) {
+             self.brush_bg = None;
+             self.brush_fg = None;
+             self.brush_accent = None;
+             self.brush_subdued = None;
+        }
 
-        let size = D2D_SIZE_U {
-            width: (rect.right - rect.left) as u32,
-            height: (rect.bottom - rect.top) as u32,
-        };
+        let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
 
-        let hwnd_rt = self.d2d_factory.CreateHwndRenderTarget(
-            &D2D1_RENDER_TARGET_PROPERTIES::default(),
-            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd,
-                pixelSize: size,
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            },
-        )?;
+        if self.render_target.is_none() {
+            let mut rect = RECT::default();
+            GetClientRect(hwnd, &mut rect)?;
 
-        let rt: ID2D1RenderTarget = hwnd_rt.cast()?;
+            let size = D2D_SIZE_U {
+                width: (rect.right - rect.left) as u32,
+                height: (rect.bottom - rect.top) as u32,
+            };
 
-        // Background: near-black neutral
-        let brush_bg = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
-            None,
-        )?;
-        // Foreground: off-white
-        let brush_fg = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
-            None,
-        )?;
-        // Accent: muted blue
-        let brush_accent = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
-            None,
-        )?;
-        // Subdued: gray for labels
-        let brush_subdued = rt.CreateSolidColorBrush(
-            &D2D1_COLOR_F { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
-            None,
-        )?;
+            let hwnd_rt = self.d2d_factory.CreateHwndRenderTarget(
+                &D2D1_RENDER_TARGET_PROPERTIES::default(),
+                &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                    hwnd,
+                    pixelSize: size,
+                    presentOptions: D2D1_PRESENT_OPTIONS_NONE,
+                },
+            )?;
+            self.render_target = Some(hwnd_rt);
+        }
 
-        let text_format_title = self.dw_factory.CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            22.0,
-            w!("en-us"),
-        )?;
+        let rt: ID2D1RenderTarget = self.render_target.as_ref().unwrap().cast()?;
 
-        let text_format_body = self.dw_factory.CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            14.0,
-            w!("en-us"),
-        )?;
+        if self.brush_bg.is_none() {
+            self.brush_bg = Some(rt.CreateSolidColorBrush(&palette.bg, None)?);
+        }
+        if self.brush_fg.is_none() {
+            self.brush_fg = Some(rt.CreateSolidColorBrush(&palette.fg, None)?);
+        }
+        if self.brush_accent.is_none() {
+            self.brush_accent = Some(rt.CreateSolidColorBrush(&palette.accent, None)?);
+        }
+        if self.brush_subdued.is_none() {
+            self.brush_subdued = Some(rt.CreateSolidColorBrush(&palette.subdued, None)?);
+        }
 
-        let text_format_label = self.dw_factory.CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            12.0,
-            w!("en-us"),
-        )?;
+        if self.text_format_title.is_none() {
+            self.text_format_title = Some(self.dw_factory.CreateTextFormat(
+                w!("Segoe UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                22.0,
+                w!("en-us"),
+            )?);
+        }
 
-        self.render_target = Some(hwnd_rt);
-        self.brush_bg = Some(brush_bg);
-        self.brush_fg = Some(brush_fg);
-        self.brush_accent = Some(brush_accent);
-        self.brush_subdued = Some(brush_subdued);
-        self.text_format_title = Some(text_format_title);
-        self.text_format_body = Some(text_format_body);
-        self.text_format_label = Some(text_format_label);
+        if self.text_format_body.is_none() {
+            self.text_format_body = Some(self.dw_factory.CreateTextFormat(
+                w!("Segoe UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                14.0,
+                w!("en-us"),
+            )?);
+        }
 
+        if self.text_format_label.is_none() {
+            self.text_format_label = Some(self.dw_factory.CreateTextFormat(
+                w!("Segoe UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                12.0,
+                w!("en-us"),
+            )?);
+        }
+
+        self.current_theme_is_dark = Some(is_dark);
         Ok(())
     }
 
@@ -164,13 +196,15 @@ impl Renderer {
         self.text_format_title = None;
         self.text_format_body = None;
         self.text_format_label = None;
+        self.current_theme_is_dark = None;
     }
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
-            if self.create_resources(hwnd).is_err() {
+            let is_dark = state.settings.is_dark_mode();
+            if self.create_resources(hwnd, is_dark).is_err() {
                 self.discard_resources();
-                self.create_resources(hwnd)?;
+                self.create_resources(hwnd, is_dark)?;
             }
 
             let rt_hwnd = self.render_target.as_ref().unwrap();
@@ -178,13 +212,15 @@ impl Renderer {
 
             let mut rect = RECT::default();
             GetClientRect(hwnd, &mut rect)?;
-            rt_hwnd.Resize(&D2D_SIZE_U {
+            let _ = rt_hwnd.Resize(&D2D_SIZE_U {
                 width: (rect.right - rect.left) as u32,
                 height: (rect.bottom - rect.top) as u32,
-            })?;
+            });
+
+            let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
 
             rt.BeginDraw();
-            rt.Clear(Some(&D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }));
+            rt.Clear(Some(&palette.bg));
 
             let margin_x = 24.0;
             let mut y = 24.0;
