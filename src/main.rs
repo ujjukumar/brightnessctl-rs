@@ -78,6 +78,8 @@ fn main() -> Result<()> {
             lock_mode: false,
             hotkey_status: std::collections::HashMap::new(),
             last_wheel_time: None,
+            editing_monitor: None,
+            edit_buffer: String::new(),
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -127,6 +129,14 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
+            WM_KEYDOWN => {
+                handle_keydown(window, wparam.0 as u16);
+                LRESULT(0)
+            }
+            WM_CHAR => {
+                handle_char(window, wparam.0 as u16);
+                LRESULT(0)
+            }
             WM_MOUSEWHEEL => {
                 let delta = (wparam.0 >> 16) as i16;
                 let keystate = (wparam.0 & 0xffff) as u16;
@@ -301,6 +311,51 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
+unsafe fn handle_keydown(window: HWND, vk: u16) {
+    if let Some(state) = APP_STATE.as_mut() {
+        if let Some(idx) = state.editing_monitor {
+            match vk {
+                0x0D => { // VK_RETURN
+                    let val_str = state.edit_buffer.clone();
+                    if let Ok(val_u32) = val_str.parse::<u32>() {
+                        let normalized = (val_u32 as f32 / 100.0).clamp(0.0, 1.0);
+                        state.set_absolute(&[idx], normalized);
+                        
+                        // Hardware update
+                        if let Some(m) = state.monitors.get_mut(idx) {
+                            brightness::set_brightness_forced(m, (normalized * 100.0).round() as u32);
+                        }
+                    }
+                    state.editing_monitor = None;
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
+                0x1B => { // VK_ESCAPE
+                    state.editing_monitor = None;
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+unsafe fn handle_char(window: HWND, ch: u16) {
+    if let Some(state) = APP_STATE.as_mut() {
+        if state.editing_monitor.is_some() {
+            let c = ch as u8 as char;
+            if c.is_ascii_digit() {
+                if state.edit_buffer.len() < 3 {
+                    state.edit_buffer.push(c);
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
+            } else if ch == 0x08 { // Backspace
+                state.edit_buffer.pop();
+                let _ = InvalidateRect(Some(window), None, false);
+            }
+        }
+    }
+}
+
 unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
     if let Some(state) = APP_STATE.as_mut() {
         if let Some(hover_idx) = state.hover_monitor_idx {
@@ -400,7 +455,17 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         let slider_width = (width - 2.0 * margin_x).max(1.0);
 
         let mut hit_idx = None;
+        let mut label_hit_idx = None;
         for (i, _) in state.monitors.iter().enumerate() {
+            let label_top = cur_y;
+            let label_bottom = cur_y + 16.0;
+            let label_left = width - margin_x - 60.0;
+            let label_right = width - margin_x;
+
+            if (x as f32) >= label_left && (x as f32) <= label_right && (y as f32) >= label_top && (y as f32) <= label_bottom {
+                label_hit_idx = Some(i);
+            }
+
             let slider_top = cur_y + 24.0 + 8.0;
             let slider_bottom = slider_top + 4.0;
             
@@ -420,11 +485,19 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
             let _ = InvalidateRect(Some(window), None, false);
         }
 
-        // If clicking down, find which slider
+        // If clicking down, find which slider or label
         if is_down {
-            if let Some(idx) = hit_idx {
+            if let Some(idx) = label_hit_idx {
+                state.editing_monitor = Some(idx);
+                state.edit_buffer = format!("{}", (state.brightness[idx] * 100.0).round() as u32);
+                let _ = InvalidateRect(Some(window), None, false);
+            } else if let Some(idx) = hit_idx {
+                state.editing_monitor = None; // Stop editing if clicking elsewhere
                 DRAGGING_MONITOR_IDX = Some(idx);
                 state.active_monitor_idx = Some(idx);
+                let _ = InvalidateRect(Some(window), None, false);
+            } else {
+                state.editing_monitor = None;
                 let _ = InvalidateRect(Some(window), None, false);
             }
         }

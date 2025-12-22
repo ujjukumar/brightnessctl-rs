@@ -80,6 +80,8 @@ pub struct AppState {
     pub lock_mode: bool,
     pub hotkey_status: HashMap<Action, bool>,
     pub last_wheel_time: Option<Instant>,
+    pub editing_monitor: Option<usize>,
+    pub edit_buffer: String,
 }
 
 impl AppState {

@@ -40,12 +40,12 @@
 ## Phase 5: Numeric Entry
 **Goal:** Implement inline editing for percentage labels.
 
-- [~] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
-- [ ] Task: Implement UI transition from label to text input on click.
-- [ ] Task: Handle `WM_CHAR`, `VK_RETURN`, `VK_ESCAPE`, and focus loss (`WM_KILLFOCUS`).
-- [ ] Task: Implement parsing (0-100 -> 0.0-1.0) and single-write commit logic.
-- [ ] Task: Unit tests for numeric parsing, clamping, and commit behavior.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Numeric Entry' (Protocol in workflow.md)
+- [x] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
+- [x] Task: Implement UI transition from label to text input on click.
+- [x] Task: Handle `WM_CHAR`, `VK_RETURN`, `VK_ESCAPE`, and focus loss (`WM_KILLFOCUS`).
+- [x] Task: Implement parsing (0-100 -> 0.0-1.0) and single-write commit logic.
+- [x] Task: Unit tests for numeric parsing, clamping, and commit behavior.
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Numeric Entry' (Protocol in workflow.md)
 
 ## Phase 6: Preset Cycling
 **Goal:** Implement the preset cycling action.

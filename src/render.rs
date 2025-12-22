@@ -276,17 +276,30 @@ impl Renderer {
                 
                 // Brightness percentage (right aligned)
                 let brightness_normalized = state.brightness[i];
-                let pct_text: Vec<u16> = format!("{}%", (brightness_normalized * 100.0).round() as u32).encode_utf16().collect();
+                let is_editing = state.editing_monitor == Some(i);
+                let (pct_text, brush) = if is_editing {
+                    (format!("{}|", state.edit_buffer), self.brush_accent.as_ref().unwrap())
+                } else {
+                    (format!("{}%", (brightness_normalized * 100.0).round() as u32), self.brush_subdued.as_ref().unwrap())
+                };
+
+                let pct_text_wide: Vec<u16> = pct_text.encode_utf16().collect();
+                let label_rect = D2D_RECT_F {
+                    left: rect.right as f32 - margin_x - 60.0,
+                    top: y,
+                    right: rect.right as f32 - margin_x,
+                    bottom: y + 16.0,
+                };
+
+                if is_editing {
+                    rt.DrawRectangle(&label_rect, self.brush_accent.as_ref().unwrap(), 1.0, None);
+                }
+
                 rt.DrawText(
-                    &pct_text,
+                    &pct_text_wide,
                     self.text_format_label.as_ref().unwrap(),
-                    &D2D_RECT_F {
-                        left: rect.right as f32 - margin_x - 60.0,
-                        top: y,
-                        right: rect.right as f32 - margin_x,
-                        bottom: y + 16.0,
-                    },
-                    self.brush_subdued.as_ref().unwrap(),
+                    &label_rect,
+                    brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
