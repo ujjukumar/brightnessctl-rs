@@ -25,11 +25,11 @@ Goals: Implement rate-limiting, failure backoff, and smart startup logic.
 - [ ] Task: TDD - Unit tests for rate-limiting logic, backoff escalation, and smart restore provenance checks
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Hardware Reliability' (Protocol in workflow.md)
 
-## Phase 4: Synchronization & UI Polish
+## Phase 4: Synchronization & UI Polish [checkpoint: 0560aa0]
 Goals: Implement "Lock Mode" logic and update the UI with metadata and tooltips.
 
-- [~] Task: Logic - Implement normalized space synchronization for "Lock Mode"
-- [ ] Task: UI - Add "Lock/Sync" toggle and update monitor list with connection/DDC labels
-- [ ] Task: UI - Implement hover tooltips for detailed monitor information
-- [ ] Task: TDD - Unit tests for normalized synchronization math, including mixed min/max ranges, early saturation, and reverse movement
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Synchronization & UI' (Protocol in workflow.md)
+- [x] Task: Logic - Implement normalized space synchronization for "Lock Mode"
+- [x] Task: UI - Add "Lock/Sync" toggle and update monitor list with connection/DDC labels
+- [x] Task: UI - Implement hover tooltips for detailed monitor information
+- [x] Task: TDD - Unit tests for normalized synchronization math, including mixed min/max ranges, early saturation, and reverse movement
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Synchronization & UI' (Protocol in workflow.md)
