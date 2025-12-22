@@ -21,6 +21,7 @@ impl MonitorIdentity {
 #[derive(Debug)]
 pub struct Monitor {
     pub physical: HANDLE,
+    pub hmonitor: isize,
     pub name: String,
     pub identity: Option<MonitorIdentity>,
     pub normalized_value: f32,
@@ -65,6 +66,9 @@ impl Drop for Monitor {
 unsafe impl Send for Monitor {}
 unsafe impl Sync for Monitor {}
 
+use std::collections::HashMap;
+use crate::actions::Action;
+
 #[derive(Default)]
 pub struct AppState {
     pub monitors: Vec<Monitor>,
@@ -74,6 +78,7 @@ pub struct AppState {
     pub hover_monitor_idx: Option<usize>,
     pub active_monitor_idx: Option<usize>,
     pub lock_mode: bool,
+    pub hotkey_status: HashMap<Action, bool>,
 }
 
 impl AppState {
@@ -211,6 +216,7 @@ mod tests {
         for _ in 0..3 {
             state.monitors.push(Monitor {
                 physical: HANDLE(std::ptr::null_mut()),
+                hmonitor: 0,
                 name: "Test".to_string(),
                 identity: None,
                 normalized_value: 0.5,

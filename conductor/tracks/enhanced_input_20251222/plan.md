@@ -20,12 +20,12 @@
 ## Phase 3: Global Hotkeys
 **Goal:** Implement system-wide hotkey registration and handling.
 
-- [~] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
-- [ ] Task: Implement registration failure handling and surface status to `AppState`.
-- [ ] Task: Integrate `WM_HOTKEY` into the main message loop in `window.rs`.
-- [ ] Task: Map hotkey events to the action system.
-- [ ] Task: Unit tests for hotkey registration logic and action mapping.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Global Hotkeys' (Protocol in workflow.md)
+- [x] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
+- [x] Task: Implement registration failure handling and surface status to `AppState`.
+- [x] Task: Integrate `WM_HOTKEY` into the main message loop in `window.rs`.
+- [x] Task: Map hotkey events to the action system.
+- [x] Task: Unit tests for hotkey registration logic and action mapping.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Global Hotkeys' (Protocol in workflow.md)
 
 ## Phase 4: Mouse Wheel Support
 **Goal:** Add hover-based scroll support for sliders.

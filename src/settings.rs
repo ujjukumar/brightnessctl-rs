@@ -53,8 +53,8 @@ fn default_step_size() -> f32 {
 fn default_hotkeys() -> HashMap<Action, Hotkey> {
     let mut map = HashMap::new();
     // Default bindings: Ctrl + Alt + Up/Down/P
-    // MOD_CONTROL = 0x0008, MOD_ALT = 0x0001
-    let modifiers = 0x0008 | 0x0001; 
+    // MOD_ALT = 0x0001, MOD_CONTROL = 0x0002
+    let modifiers = 0x0002 | 0x0001; 
     
     map.insert(Action::StepUp, Hotkey { vkey: 0x26, modifiers }); // VK_UP
     map.insert(Action::StepDown, Hotkey { vkey: 0x28, modifiers }); // VK_DOWN

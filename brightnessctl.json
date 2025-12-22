@@ -9,17 +9,17 @@
     1.0
   ],
   "hotkeys": {
-    "CyclePresets": {
-      "vkey": 80,
-      "modifiers": 9
-    },
     "StepDown": {
       "vkey": 40,
-      "modifiers": 9
+      "modifiers": 3
+    },
+    "CyclePresets": {
+      "vkey": 80,
+      "modifiers": 3
     },
     "StepUp": {
       "vkey": 38,
-      "modifiers": 9
+      "modifiers": 3
     }
   },
   "step_size": 0.1

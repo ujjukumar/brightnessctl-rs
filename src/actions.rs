@@ -1,10 +1,22 @@
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(i32)]
 pub enum Action {
-    StepUp,
-    StepDown,
-    CyclePresets,
+    StepUp = 1,
+    StepDown = 2,
+    CyclePresets = 3,
+}
+
+impl Action {
+    pub fn from_i32(id: i32) -> Option<Self> {
+        match id {
+            1 => Some(Action::StepUp),
+            2 => Some(Action::StepDown),
+            3 => Some(Action::CyclePresets),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -24,9 +36,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_command_equality() {
-        let c1 = Command { action: Action::StepUp, target: Target::Focused };
-        let c2 = Command { action: Action::StepUp, target: Target::Focused };
-        assert_eq!(c1, c2);
+    fn test_action_from_i32() {
+        assert_eq!(Action::from_i32(1), Some(Action::StepUp));
+        assert_eq!(Action::from_i32(2), Some(Action::StepDown));
+        assert_eq!(Action::from_i32(3), Some(Action::CyclePresets));
+        assert_eq!(Action::from_i32(0), None);
+        assert_eq!(Action::from_i32(4), None);
     }
 }

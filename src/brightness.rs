@@ -155,6 +155,7 @@ mod tests {
     fn test_backoff_escalation() {
         let mut m = crate::state::Monitor {
             physical: HANDLE::default(),
+            hmonitor: 0,
             name: "Test".into(),
             identity: None,
             normalized_value: 0.0,

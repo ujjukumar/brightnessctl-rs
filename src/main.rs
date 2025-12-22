@@ -11,6 +11,7 @@ mod render;
 mod settings;
 mod menu;
 mod actions;
+mod hotkeys;
 
 use crate::state::AppState;
 
@@ -24,9 +25,11 @@ use windows::{
 };
 
 use crate::settings::Settings;
+use crate::actions::Action;
 
 static mut APP_STATE: Option<AppState> = None;
 static mut RENDERER: Option<render::Renderer> = None;
+static mut HOTKEY_MANAGER: Option<hotkeys::HotkeyManager> = None;
 
 // Input state
 static mut DRAGGING_MONITOR_IDX: Option<usize> = None;
@@ -73,6 +76,7 @@ fn main() -> Result<()> {
             hover_monitor_idx: None,
             active_monitor_idx: None,
             lock_mode: false,
+            hotkey_status: std::collections::HashMap::new(),
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -80,6 +84,19 @@ fn main() -> Result<()> {
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
         let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
+
+        // Initialize hotkeys
+        let mut hkm = hotkeys::HotkeyManager::new();
+        if let Some(state) = APP_STATE.as_mut() {
+            hkm.register_all(hwnd, &state.settings.hotkeys);
+            hkm.sync_status(state);
+            
+            let failed_count = state.hotkey_status.values().filter(|&&v| !v).count();
+            if failed_count > 0 {
+                state.status_message = format!("Warning: {} hotkeys failed to register", failed_count);
+            }
+        }
+        HOTKEY_MANAGER = Some(hkm);
 
         if let Some(state) = APP_STATE.as_ref() {
             update_theme_menu(hwnd, state);
@@ -109,6 +126,11 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
+            WM_HOTKEY => {
+                let action_id = wparam.0 as i32;
+                handle_hotkey(window, action_id);
+                LRESULT(0)
+            }
             WM_COMMAND => {
                 let id = (wparam.0 & 0xffff) as u16;
                 match id {
@@ -268,6 +290,52 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             _ => DefWindowProcW(window, message, wparam, lparam),
+        }
+    }
+}
+
+unsafe fn handle_hotkey(window: HWND, action_id: i32) {
+    if let Some(state) = APP_STATE.as_mut() {
+        if let Some(action) = Action::from_i32(action_id) {
+            let mut targets = state.get_target_indices();
+            
+            // Refine targeting: If default fallback was chosen (no UI hover/focus), check system cursor
+            if !state.lock_mode && state.hover_monitor_idx.is_none() && state.active_monitor_idx.is_none() {
+                let hmonitor = monitors::get_monitor_handle_at_cursor();
+                if hmonitor != 0 {
+                    if let Some(idx) = state.monitors.iter().position(|m| m.hmonitor == hmonitor) {
+                        targets = vec![idx];
+                    }
+                }
+            }
+
+            if targets.is_empty() { return; }
+
+            match action {
+                Action::StepUp => {
+                    let step = state.settings.step_size;
+                    state.apply_step(&targets, step);
+                }
+                Action::StepDown => {
+                    let step = -state.settings.step_size;
+                    state.apply_step(&targets, step);
+                }
+                Action::CyclePresets => {
+                    // Deferred to Phase 6
+                    state.status_message = "Preset cycling not yet implemented".to_string();
+                }
+            }
+
+            // Update hardware for all affected targets
+            for &idx in &targets {
+                if let Some(m) = state.monitors.get_mut(idx) {
+                    let val = state.brightness[idx];
+                    brightness::set_brightness(m, (val * 100.0).round() as u32);
+                }
+            }
+
+            state.status_message = format!("Hotkey: {:?}", action);
+            let _ = InvalidateRect(Some(window), None, false);
         }
     }
 }

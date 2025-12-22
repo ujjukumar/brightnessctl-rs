@@ -1,10 +1,11 @@
 use crate::state::Monitor;
 use windows::core::{BOOL, PCWSTR, GUID};
-use windows::Win32::Foundation::{LPARAM, RECT, HWND};
+use windows::Win32::Foundation::{LPARAM, RECT, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFOEXW, 
-    EnumDisplayDevicesW, DISPLAY_DEVICEW,
+    EnumDisplayDevicesW, DISPLAY_DEVICEW, MonitorFromPoint, MONITOR_DEFAULTTONULL,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use windows::Win32::Devices::Display::{
     GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
 };
@@ -28,6 +29,19 @@ pub fn enumerate_monitors() -> Vec<Monitor> {
         );
     }
     monitors
+}
+
+pub fn get_monitor_handle_at_cursor() -> isize {
+    unsafe {
+        let mut point = POINT::default();
+        if GetCursorPos(&mut point).is_ok() {
+            let hmonitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+            if !hmonitor.is_invalid() {
+                return hmonitor.0 as isize;
+            }
+        }
+        0
+    }
 }
 
 /// Retrieves the EDID blob for a given physical monitor handle, if available.
@@ -155,6 +169,7 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
 
                     monitors.push(Monitor {
                         physical: pm.hPhysicalMonitor,
+                        hmonitor: hmonitor.0 as isize,
                         name: String::from_utf16_lossy(&desc).trim_matches('\0').to_string(),
                         identity,
                         normalized_value: 0.0,
