@@ -47,7 +47,7 @@
 - [x] Task: Unit tests for numeric parsing, clamping, and commit behavior.
 - [x] Task: Conductor - User Manual Verification 'Phase 5: Numeric Entry' (Protocol in workflow.md)
 
-## Phase 6: Preset Cycling
+## Phase 6: Preset Cycling [checkpoint: 6cc35d3]
 **Goal:** Implement the preset cycling action.
 
 - [x] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
@@ -59,7 +59,7 @@
 ## Phase 7: UI Polish & Final Integration
 **Goal:** Finalize failure indicators and ensure consistency across all input paths.
 
-- [ ] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
+- [~] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
 - [ ] Task: Verify all input paths (Keys, Wheel, Numeric) share the same idempotent write pipeline.
 - [ ] Task: Final end-to-end manual verification of all features.
 - [ ] Task: Conductor - User Manual Verification 'Phase 7: UI Polish & Final Integration' (Protocol in workflow.md)
