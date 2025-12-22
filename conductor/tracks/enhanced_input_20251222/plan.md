@@ -37,7 +37,7 @@
 - [x] Task: Unit tests for wheel delta mapping and rate limiting.
 - [x] Task: Conductor - User Manual Verification 'Phase 4: Mouse Wheel Support' (Protocol in workflow.md)
 
-## Phase 5: Numeric Entry
+## Phase 5: Numeric Entry [checkpoint: 06c3e8e]
 **Goal:** Implement inline editing for percentage labels.
 
 - [x] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
@@ -50,7 +50,7 @@
 ## Phase 6: Preset Cycling
 **Goal:** Implement the preset cycling action.
 
-- [ ] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
+- [~] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
 - [ ] Task: Handle empty or invalid preset configurations gracefully.
 - [ ] Task: Connect preset cycling to the hotkey action.
 - [ ] Task: Unit tests for cycling order and edge cases.
