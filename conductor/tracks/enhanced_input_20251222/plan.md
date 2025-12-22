@@ -12,10 +12,10 @@
 ## Phase 2: Configuration & Metadata
 **Goal:** Update settings to support hotkeys and ensure presets are handled correctly.
 
-- [~] Task: Update `Settings` struct in `settings.rs` to include hotkey bindings and ensure preset order is preserved.
-- [ ] Task: Implement logic to load/save hotkey bindings from `brightnessctl.json`.
-- [ ] Task: Unit tests for settings serialization and preset preservation.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Configuration & Metadata' (Protocol in workflow.md)
+- [x] Task: Update `Settings` struct in `settings.rs` to include hotkey bindings and ensure preset order is preserved.
+- [x] Task: Implement logic to load/save hotkey bindings from `brightnessctl.json`.
+- [x] Task: Unit tests for settings serialization and preset preservation.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Configuration & Metadata' (Protocol in workflow.md)
 
 ## Phase 3: Global Hotkeys
 **Goal:** Implement system-wide hotkey registration and handling.

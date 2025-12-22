@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use windows::Win32::System::Registry::*;
 use windows::core::w;
 use crate::state::MonitorIdentity;
+use crate::actions::Action;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum ThemeMode {
@@ -22,11 +23,44 @@ pub struct MonitorState {
     pub last_seen_device_path: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Hotkey {
+    pub vkey: u32,
+    pub modifiers: u32, // MOD_CONTROL | MOD_ALT etc
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub theme: ThemeMode,
     #[serde(default)]
     pub monitor_states: HashMap<String, MonitorState>,
+    #[serde(default = "default_presets")]
+    pub presets: Vec<f32>,
+    #[serde(default = "default_hotkeys")]
+    pub hotkeys: HashMap<Action, Hotkey>,
+    #[serde(default = "default_step_size")]
+    pub step_size: f32,
+}
+
+fn default_presets() -> Vec<f32> {
+    vec![0.0, 0.25, 0.5, 0.75, 1.0]
+}
+
+fn default_step_size() -> f32 {
+    0.1
+}
+
+fn default_hotkeys() -> HashMap<Action, Hotkey> {
+    let mut map = HashMap::new();
+    // Default bindings: Ctrl + Alt + Up/Down/P
+    // MOD_CONTROL = 0x0008, MOD_ALT = 0x0001
+    let modifiers = 0x0008 | 0x0001; 
+    
+    map.insert(Action::StepUp, Hotkey { vkey: 0x26, modifiers }); // VK_UP
+    map.insert(Action::StepDown, Hotkey { vkey: 0x28, modifiers }); // VK_DOWN
+    map.insert(Action::CyclePresets, Hotkey { vkey: 0x50, modifiers }); // 'P'
+    
+    map
 }
 
 impl Default for Settings {
@@ -34,6 +68,9 @@ impl Default for Settings {
         Self {
             theme: ThemeMode::Auto,
             monitor_states: HashMap::new(),
+            presets: default_presets(),
+            hotkeys: default_hotkeys(),
+            step_size: default_step_size(),
         }
     }
 }
@@ -148,18 +185,45 @@ mod tests {
 
     #[test]
     fn test_settings_serialization() {
-        let settings = Settings {
-            theme: ThemeMode::Dark,
-            monitor_states: HashMap::new(),
-        };
+        let mut settings = Settings::default();
+        settings.theme = ThemeMode::Dark;
         let serialized = serde_json::to_string(&settings).unwrap();
         let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(settings.theme, deserialized.theme);
+        assert_eq!(settings.presets, deserialized.presets);
+        assert_eq!(settings.hotkeys.get(&Action::StepUp), deserialized.hotkeys.get(&Action::StepUp));
     }
 
     #[test]
     fn test_settings_default() {
         let settings = Settings::default();
         assert_eq!(settings.theme, ThemeMode::Auto);
+        assert!(!settings.presets.is_empty());
+        assert!(settings.hotkeys.contains_key(&Action::StepUp));
     }
-}
+
+        #[test]
+
+        fn test_custom_hotkey_serialization() {
+
+            let mut settings = Settings::default();
+
+            let custom_hotkey = Hotkey { vkey: 0x41, modifiers: 0x0001 }; // Alt + A
+
+            settings.hotkeys.insert(Action::StepUp, custom_hotkey.clone());
+
+            
+
+            let serialized = serde_json::to_string(&settings).unwrap();
+
+            let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
+
+            
+
+            assert_eq!(deserialized.hotkeys.get(&Action::StepUp).unwrap(), &custom_hotkey);
+
+        }
+
+    }
+
+    
