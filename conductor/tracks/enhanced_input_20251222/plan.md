@@ -27,7 +27,7 @@
 - [x] Task: Unit tests for hotkey registration logic and action mapping.
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Global Hotkeys' (Protocol in workflow.md)
 
-## Phase 4: Mouse Wheel Support
+## Phase 4: Mouse Wheel Support [checkpoint: 7632ed8]
 **Goal:** Add hover-based scroll support for sliders.
 
 - [x] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
@@ -40,7 +40,7 @@
 ## Phase 5: Numeric Entry
 **Goal:** Implement inline editing for percentage labels.
 
-- [ ] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
+- [~] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
 - [ ] Task: Implement UI transition from label to text input on click.
 - [ ] Task: Handle `WM_CHAR`, `VK_RETURN`, `VK_ESCAPE`, and focus loss (`WM_KILLFOCUS`).
 - [ ] Task: Implement parsing (0-100 -> 0.0-1.0) and single-write commit logic.
