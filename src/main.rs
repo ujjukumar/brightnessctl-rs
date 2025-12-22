@@ -36,18 +36,33 @@ fn main() -> Result<()> {
         win::init_dpi()?;
 
         // Initialize state
-        let monitors = monitors::enumerate_monitors();
+        let settings = Settings::load();
+        let mut monitors = monitors::enumerate_monitors();
         let mut initial_brightness = Vec::new();
 
-        for m in &monitors {
-            if let Some(b) = brightness::get_brightness(m) {
-                initial_brightness.push(b);
-            } else {
-                initial_brightness.push(50); // Default if read fails
+        for m in &mut monitors {
+            let mut applied = false;
+            
+            // Smart Restore Logic
+            if let Some(ident) = &m.identity {
+                if let Some(saved) = settings.get_monitor_state(ident) {
+                    if saved.last_set_by_app && saved.write_confirmed {
+                        if brightness::set_brightness(m, saved.brightness_value) {
+                            initial_brightness.push(saved.brightness_value);
+                            applied = true;
+                        }
+                    }
+                }
+            }
+
+            if !applied {
+                if let Some(b) = brightness::get_brightness(m) {
+                    initial_brightness.push(b);
+                } else {
+                    initial_brightness.push(50); // Default if read fails
+                }
             }
         }
-        
-        let settings = Settings::load();
 
         APP_STATE = Some(AppState {
             monitors,
@@ -89,7 +104,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.monitors = monitors::enumerate_monitors();
                             state.brightness.clear();
-                            for m in &state.monitors {
+                            for m in &mut state.monitors {
                                 if let Some(b) = brightness::get_brightness(m) {
                                     state.brightness.push(b);
                                 } else {
@@ -183,6 +198,16 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 DRAGGING_MONITOR_IDX = None;
                 if let Some(state) = APP_STATE.as_mut() {
                     state.active_monitor_idx = None;
+                    
+                    // Persist monitor states
+                    for (i, m) in state.monitors.iter().enumerate() {
+                        if let Some(ident) = &m.identity {
+                            let val = state.brightness[i];
+                            state.settings.set_monitor_state(ident, m.to_state(val));
+                        }
+                    }
+                    let _ = state.settings.save();
+
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 let _ = ReleaseCapture();
@@ -250,7 +275,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
                 state.brightness[idx] = new_val;
                 
                 // Hardware update
-                let m = &state.monitors[idx];
+                let m = &mut state.monitors[idx];
                 brightness::set_brightness(m, new_val);
                 
                 // Repaint

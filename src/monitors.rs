@@ -162,6 +162,13 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
                         write_confirmed: false,
                         timestamp: 0,
                         device_path: device_id,
+                        last_write_time: None,
+                        failure_count: 0,
+                        is_disabled: false,
+                        hardware_min: 0,
+                        hardware_max: 100,
+                        observed_min: 0,
+                        observed_max: 100,
                     });
                 }
             }

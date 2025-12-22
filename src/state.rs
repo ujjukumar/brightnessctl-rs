@@ -18,6 +18,8 @@ impl MonitorIdentity {
     }
 }
 
+use std::time::Instant;
+
 #[derive(Debug)]
 pub struct Monitor {
     pub physical: HANDLE,
@@ -28,6 +30,13 @@ pub struct Monitor {
     pub write_confirmed: bool,
     pub timestamp: u64,
     pub device_path: String,
+    pub last_write_time: Option<Instant>,
+    pub failure_count: u32,
+    pub is_disabled: bool,
+    pub hardware_min: u32,
+    pub hardware_max: u32,
+    pub observed_min: u32,
+    pub observed_max: u32,
 }
 
 impl Monitor {
