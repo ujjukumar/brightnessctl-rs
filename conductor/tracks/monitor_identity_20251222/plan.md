@@ -1,6 +1,6 @@
 # Implementation Plan: Monitor Identity and Advanced Control (spec_20251222)
 
-## Phase 1: Robust Monitor Identification & EDID Logic
+## Phase 1: Robust Monitor Identification & EDID Logic [checkpoint: bf76556]
 Goals: Implement Win32 EDID retrieval and the composite key generation logic.
 
 - [x] Task: Win32 - Implement `get_edid_blob` using Registry/SetupAPI
