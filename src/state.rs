@@ -79,6 +79,7 @@ pub struct AppState {
     pub active_monitor_idx: Option<usize>,
     pub lock_mode: bool,
     pub hotkey_status: HashMap<Action, bool>,
+    pub last_wheel_time: Option<Instant>,
 }
 
 impl AppState {

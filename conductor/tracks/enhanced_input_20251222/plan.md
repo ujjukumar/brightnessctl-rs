@@ -30,12 +30,12 @@
 ## Phase 4: Mouse Wheel Support
 **Goal:** Add hover-based scroll support for sliders.
 
-- [~] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
-- [ ] Task: Handle `WM_MOUSEWHEEL` and map deltas to normalized space (0.0-1.0).
-- [ ] Task: Implement coarse vs fine (`Shift`) increments.
-- [ ] Task: Ensure wheel events are rate-limited and use the provenance-aware write path.
-- [ ] Task: Unit tests for wheel delta mapping and rate limiting.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Mouse Wheel Support' (Protocol in workflow.md)
+- [x] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
+- [x] Task: Handle `WM_MOUSEWHEEL` and map deltas to normalized space (0.0-1.0).
+- [x] Task: Implement coarse vs fine (`Shift`) increments.
+- [x] Task: Ensure wheel events are rate-limited and use the provenance-aware write path.
+- [x] Task: Unit tests for wheel delta mapping and rate limiting.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Mouse Wheel Support' (Protocol in workflow.md)
 
 ## Phase 5: Numeric Entry
 **Goal:** Implement inline editing for percentage labels.

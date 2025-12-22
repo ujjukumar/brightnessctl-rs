@@ -77,6 +77,7 @@ fn main() -> Result<()> {
             active_monitor_idx: None,
             lock_mode: false,
             hotkey_status: std::collections::HashMap::new(),
+            last_wheel_time: None,
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -126,6 +127,12 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
+            WM_MOUSEWHEEL => {
+                let delta = (wparam.0 >> 16) as i16;
+                let keystate = (wparam.0 & 0xffff) as u16;
+                handle_wheel(window, delta, keystate);
+                LRESULT(0)
+            }
             WM_HOTKEY => {
                 let action_id = wparam.0 as i32;
                 handle_hotkey(window, action_id);
@@ -290,6 +297,44 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             _ => DefWindowProcW(window, message, wparam, lparam),
+        }
+    }
+}
+
+unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
+    if let Some(state) = APP_STATE.as_mut() {
+        if let Some(hover_idx) = state.hover_monitor_idx {
+            // Rate limiting
+            let now = std::time::Instant::now();
+            if let Some(last) = state.last_wheel_time {
+                if now.duration_since(last) < std::time::Duration::from_millis(50) {
+                    return; // Too fast
+                }
+            }
+            state.last_wheel_time = Some(now);
+
+            // Shift for fine (0.01), else coarse (0.05)
+            let step = if (keystate & 0x0004) != 0 { 0.01 } else { 0.05 };
+            let direction = if delta > 0 { 1.0 } else { -1.0 };
+            let change = direction * step;
+
+            let targets = if state.lock_mode {
+                (0..state.monitors.len()).collect()
+            } else {
+                vec![hover_idx]
+            };
+
+            state.apply_step(&targets, change);
+
+            // Update hardware
+            for &idx in &targets {
+                if let Some(m) = state.monitors.get_mut(idx) {
+                    let val = state.brightness[idx];
+                    brightness::set_brightness(m, (val * 100.0).round() as u32);
+                }
+            }
+
+            let _ = InvalidateRect(Some(window), None, false);
         }
     }
 }
