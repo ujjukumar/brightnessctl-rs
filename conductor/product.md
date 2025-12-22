@@ -16,6 +16,8 @@ A native, professional Windows 11 brightness controller designed for power users
 - **Comprehensive Monitor Support:** Automatic enumeration and control of all connected physical monitors.
 - **Individual Controls:** Discrete sliders for each monitor to allow fine-tuned brightness levels.
 - **Precision Input:** Support for mouse interactions (click-and-drag) and optional keyboard refinements.
+- **Native Menu Bar:** Familiar access to application functions like refreshing monitors and theme selection.
+- **Settings & Theming:** Persistent configuration including Light, Dark, and Auto (System Sync) theme modes.
 
 ## Future Roadmap
 - **System Tray Integration:** Allow the utility to reside in the system tray for even quicker access.

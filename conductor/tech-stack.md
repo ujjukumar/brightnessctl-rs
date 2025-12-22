@@ -2,6 +2,7 @@
 
 ## Core Language & Toolchain
 - **Rust (Stable):** Chosen for its performance, memory safety, and zero-cost abstractions, essential for a high-performance system utility.
+- **Serde:** Used for robust and efficient JSON serialization/deserialization of application settings.
 - **MSVC Toolchain:** Required for native Windows integration and compatibility with system libraries.
 
 ## Operating System & Platform
@@ -16,6 +17,7 @@
 ## Display & Brightness APIs
 - **Dxva2 (DirectX Video Acceleration):** Used for controlling brightness on internal (laptop) displays.
 - **DDC/CI (Display Data Channel / Command Interface):** Used for communication with external monitors to retrieve and set VCP features (specifically VCP code `0x10`).
+- **Registry API:** Used for system-wide preference detection, such as Light/Dark mode.
 
 ## Build & Optimization
 - **Cargo:** The standard Rust build system, configured with a high-optimization release profile to ensure a single EXE output under 1MB.

@@ -1,10 +1,20 @@
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Devices::Display::{DestroyPhysicalMonitors, PHYSICAL_MONITOR};
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MonitorIdentity {
+    pub manufacturer_id: String,
+    pub product_code: u16,
+    pub serial: String,
+    pub is_fallback: bool,
+}
 
 #[derive(Debug)]
 pub struct Monitor {
     pub physical: HANDLE,
     pub name: String,
+    pub identity: Option<MonitorIdentity>, // Added identity
 }
 
 impl Drop for Monitor {

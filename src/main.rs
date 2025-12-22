@@ -5,6 +5,7 @@ mod win;
 mod window;
 mod monitors;
 mod brightness;
+mod edid;
 mod state;
 mod render;
 mod settings;
