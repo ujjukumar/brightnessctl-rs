@@ -9,7 +9,7 @@
 - [x] Task: Unit tests for targeting rules and normalized arithmetic.
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Foundation & Action System' (Protocol in workflow.md)
 
-## Phase 2: Configuration & Metadata
+## Phase 2: Configuration & Metadata [checkpoint: 1d9ab79]
 **Goal:** Update settings to support hotkeys and ensure presets are handled correctly.
 
 - [x] Task: Update `Settings` struct in `settings.rs` to include hotkey bindings and ensure preset order is preserved.
@@ -20,7 +20,7 @@
 ## Phase 3: Global Hotkeys
 **Goal:** Implement system-wide hotkey registration and handling.
 
-- [ ] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
+- [~] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
 - [ ] Task: Implement registration failure handling and surface status to `AppState`.
 - [ ] Task: Integrate `WM_HOTKEY` into the main message loop in `window.rs`.
 - [ ] Task: Map hotkey events to the action system.
