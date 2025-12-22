@@ -16,7 +16,7 @@ Goals: Update `state.rs` and `settings.rs` to support per-monitor metadata and p
 - [ ] Task: TDD - Unit tests for state persistence and retrieval with different monitor configurations
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: State Persistence' (Protocol in workflow.md)
 
-## Phase 3: Defensive Hardware Control & Reliability
+## Phase 3: Defensive Hardware Control & Reliability [checkpoint: 19fd108]
 Goals: Implement rate-limiting, failure backoff, and smart startup logic.
 
 - [~] Task: Brightness - Implement DDC write rate-limiting and failure backoff (disable control after N failures)
