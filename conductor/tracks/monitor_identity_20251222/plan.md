@@ -11,8 +11,8 @@ Goals: Implement Win32 EDID retrieval and the composite key generation logic.
 ## Phase 2: Enhanced Persistence & State Management
 Goals: Update `state.rs` and `settings.rs` to support per-monitor metadata and persistence.
 
-- [ ] Task: State - Update `AppState` to track per-monitor metadata (normalized values, flags, timestamps)
-- [ ] Task: Settings - Implement `save_monitor_state` and `load_monitor_state` using the new composite keys
+- [x] Task: State - Update `AppState` to track per-monitor metadata (normalized values, flags, timestamps)
+- [~] Task: Settings - Implement `save_monitor_state` and `load_monitor_state` using the new composite keys
 - [ ] Task: TDD - Unit tests for state persistence and retrieval with different monitor configurations
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: State Persistence' (Protocol in workflow.md)
 

@@ -149,6 +149,7 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
             if GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut physical_monitors).is_ok() {
                 for pm in physical_monitors {
                     let desc = pm.szPhysicalMonitorDescription;
+                    let device_id = get_monitor_device_id(hmonitor).unwrap_or_default();
                     let edid_blob = get_edid_blob(hmonitor);
                     let identity = edid_blob.and_then(|blob| crate::edid::parse_identity(&blob));
 
@@ -156,6 +157,11 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
                         physical: pm.hPhysicalMonitor,
                         name: String::from_utf16_lossy(&desc).trim_matches('\0').to_string(),
                         identity,
+                        normalized_value: 0.0,
+                        last_set_by_app: false,
+                        write_confirmed: false,
+                        timestamp: 0,
+                        device_path: device_id,
                     });
                 }
             }
