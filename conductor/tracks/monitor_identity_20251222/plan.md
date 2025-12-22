@@ -8,7 +8,7 @@ Goals: Implement Win32 EDID retrieval and the composite key generation logic.
 - [x] Task: TDD - Unit tests for composite key stability, fallback logic, and EDID hash determinism (across simulated reboots/reconnects)
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Monitor Identification' (Protocol in workflow.md)
 
-## Phase 2: Enhanced Persistence & State Management
+## Phase 2: Enhanced Persistence & State Management [checkpoint: 8546d71]
 Goals: Update `state.rs` and `settings.rs` to support per-monitor metadata and persistence.
 
 - [x] Task: State - Update `AppState` to track per-monitor metadata (normalized values, flags, timestamps)
