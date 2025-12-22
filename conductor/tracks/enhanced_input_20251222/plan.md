@@ -56,7 +56,7 @@
 - [x] Task: Unit tests for cycling order and edge cases.
 - [x] Task: Conductor - User Manual Verification 'Phase 6: Preset Cycling' (Protocol in workflow.md)
 
-## Phase 7: UI Polish & Final Integration
+## Phase 7: UI Polish & Final Integration [checkpoint: 5dfd36e]
 **Goal:** Finalize failure indicators and ensure consistency across all input paths.
 
 - [x] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
