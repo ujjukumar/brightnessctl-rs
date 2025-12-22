@@ -41,14 +41,24 @@ pub fn get_brightness(m: &mut Monitor) -> Option<u32> {
 }
 
 pub fn set_brightness(m: &mut Monitor, value: u32) -> bool {
+    set_brightness_internal(m, value, false)
+}
+
+pub fn set_brightness_forced(m: &mut Monitor, value: u32) -> bool {
+    set_brightness_internal(m, value, true)
+}
+
+fn set_brightness_internal(m: &mut Monitor, value: u32, force: bool) -> bool {
     if m.is_disabled {
         return false;
     }
 
     let now = Instant::now();
-    if let Some(last) = m.last_write_time {
-        if now.duration_since(last) < Duration::from_millis(500) {
-            return false;
+    if !force {
+        if let Some(last) = m.last_write_time {
+            if now.duration_since(last) < Duration::from_millis(100) {
+                return false;
+            }
         }
     }
 

@@ -10,6 +10,7 @@ mod state;
 mod render;
 mod settings;
 mod menu;
+mod actions;
 
 use crate::state::AppState;
 
@@ -48,7 +49,7 @@ fn main() -> Result<()> {
                 if let Some(saved) = settings.get_monitor_state(ident) {
                     if saved.last_set_by_app && saved.write_confirmed {
                         if brightness::set_brightness(m, saved.brightness_value) {
-                            initial_brightness.push(saved.brightness_value);
+                            initial_brightness.push(saved.brightness_value as f32 / 100.0);
                             applied = true;
                         }
                     }
@@ -57,9 +58,9 @@ fn main() -> Result<()> {
 
             if !applied {
                 if let Some(b) = brightness::get_brightness(m) {
-                    initial_brightness.push(b);
+                    initial_brightness.push(b as f32 / 100.0);
                 } else {
-                    initial_brightness.push(50); // Default if read fails
+                    initial_brightness.push(0.5); // Default if read fails
                 }
             }
         }
@@ -120,9 +121,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                             state.brightness.clear();
                             for m in &mut state.monitors {
                                 if let Some(b) = brightness::get_brightness(m) {
-                                    state.brightness.push(b);
+                                    state.brightness.push(b as f32 / 100.0);
                                 } else {
-                                    state.brightness.push(50);
+                                    state.brightness.push(0.5);
                                 }
                             }
                             state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
@@ -200,8 +201,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                  LRESULT(0)
             }
             WM_LBUTTONDOWN => {
-                let x = (lparam.0 & 0xffff) as i32;
-                let y = ((lparam.0 >> 16) & 0xffff) as i32;
+                let x = (lparam.0 as i16) as i32;
+                let y = ((lparam.0 >> 16) as i16) as i32;
                 handle_input(window, x, y, true);
                 SetCapture(window);
                 LRESULT(0)
@@ -215,8 +216,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 };
                 let _ = TrackMouseEvent(&mut tme);
 
-                let x = (lparam.0 & 0xffff) as i32;
-                let y = ((lparam.0 >> 16) & 0xffff) as i32;
+                let x = (lparam.0 as i16) as i32;
+                let y = ((lparam.0 >> 16) as i16) as i32;
                 handle_input(window, x, y, false);
                 LRESULT(0)
             }
@@ -228,15 +229,31 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
+                let dragged_idx = DRAGGING_MONITOR_IDX;
                 DRAGGING_MONITOR_IDX = None;
+                
                 if let Some(state) = APP_STATE.as_mut() {
                     state.active_monitor_idx = None;
                     
+                    if let Some(idx) = dragged_idx {
+                        if state.lock_mode {
+                             for (i, m) in state.monitors.iter_mut().enumerate() {
+                                let val = state.brightness[i];
+                                brightness::set_brightness_forced(m, (val * 100.0).round() as u32);
+                            }
+                        } else {
+                             let val = state.brightness[idx];
+                             let m = &mut state.monitors[idx];
+                             brightness::set_brightness_forced(m, (val * 100.0).round() as u32);
+                        }
+                    }
+
                     // Persist monitor states
                     for (i, m) in state.monitors.iter().enumerate() {
                         if let Some(ident) = &m.identity {
                             let val = state.brightness[i];
-                            state.settings.set_monitor_state(ident, m.to_state(val));
+                            let brightness_u32 = (val * 100.0).round() as u32;
+                            state.settings.set_monitor_state(ident, m.to_state(brightness_u32));
                         }
                     }
                     let _ = state.settings.save();
@@ -267,7 +284,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(window, &mut rect);
         let width = (rect.right - rect.left) as f32;
         
-        let slider_width = width - 2.0 * margin_x;
+        let slider_width = (width - 2.0 * margin_x).max(1.0);
 
         let mut hit_idx = None;
         for (i, _) in state.monitors.iter().enumerate() {
@@ -302,7 +319,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         // Processing movement/drag
         if let Some(idx) = DRAGGING_MONITOR_IDX {
             let new_pct = ((x as f32 - margin_x) / slider_width).clamp(0.0, 1.0);
-            let old_pct = state.brightness[idx] as f32 / 100.0;
+            let old_pct = state.brightness[idx];
             let delta = new_pct - old_pct;
 
             if delta.abs() > 0.001 {
@@ -311,14 +328,13 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
                     // Hardware update for all
                     for (i, m) in state.monitors.iter_mut().enumerate() {
                         let val = state.brightness[i];
-                        brightness::set_brightness(m, val);
+                        brightness::set_brightness(m, (val * 100.0).round() as u32);
                     }
                 } else {
-                    let target_val = (new_pct * 100.0) as u32;
-                    if state.brightness[idx] != target_val {
-                        state.brightness[idx] = target_val;
+                    if (state.brightness[idx] - new_pct).abs() > 0.001 {
+                        state.brightness[idx] = new_pct;
                         let m = &mut state.monitors[idx];
-                        brightness::set_brightness(m, target_val);
+                        brightness::set_brightness(m, (new_pct * 100.0).round() as u32);
                     }
                 }
                 

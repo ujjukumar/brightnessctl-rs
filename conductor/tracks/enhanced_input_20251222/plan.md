@@ -1,0 +1,65 @@
+# Plan: Enhanced Input & Hotkeys
+
+## Phase 1: Foundation & Action System
+**Goal:** Implement the data-driven action system and normalized arithmetic required for all input methods.
+
+- [x] Task: Define `Action` and `Command` Enums in `state.rs` or a new `actions.rs`.
+- [x] Task: Implement `Targeting` logic (Lock Mode vs Hover vs Primary Monitor).
+- [x] Task: Implement normalized space (0.0-1.0) step arithmetic with clamping and idempotency checks.
+- [x] Task: Unit tests for targeting rules and normalized arithmetic.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Foundation & Action System' (Protocol in workflow.md)
+
+## Phase 2: Configuration & Metadata
+**Goal:** Update settings to support hotkeys and ensure presets are handled correctly.
+
+- [ ] Task: Update `Settings` struct in `settings.rs` to include hotkey bindings and ensure preset order is preserved.
+- [ ] Task: Implement logic to load/save hotkey bindings from `brightnessctl.json`.
+- [ ] Task: Unit tests for settings serialization and preset preservation.
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: Configuration & Metadata' (Protocol in workflow.md)
+
+## Phase 3: Global Hotkeys
+**Goal:** Implement system-wide hotkey registration and handling.
+
+- [ ] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
+- [ ] Task: Implement registration failure handling and surface status to `AppState`.
+- [ ] Task: Integrate `WM_HOTKEY` into the main message loop in `window.rs`.
+- [ ] Task: Map hotkey events to the action system.
+- [ ] Task: Unit tests for hotkey registration logic and action mapping.
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Global Hotkeys' (Protocol in workflow.md)
+
+## Phase 4: Mouse Wheel Support
+**Goal:** Add hover-based scroll support for sliders.
+
+- [ ] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
+- [ ] Task: Handle `WM_MOUSEWHEEL` and map deltas to normalized space (0.0-1.0).
+- [ ] Task: Implement coarse vs fine (`Shift`) increments.
+- [ ] Task: Ensure wheel events are rate-limited and use the provenance-aware write path.
+- [ ] Task: Unit tests for wheel delta mapping and rate limiting.
+- [ ] Task: Conductor - User Manual Verification 'Phase 4: Mouse Wheel Support' (Protocol in workflow.md)
+
+## Phase 5: Numeric Entry
+**Goal:** Implement inline editing for percentage labels.
+
+- [ ] Task: Add `editing_monitor` state to `AppState` to track which label is being edited.
+- [ ] Task: Implement UI transition from label to text input on click.
+- [ ] Task: Handle `WM_CHAR`, `VK_RETURN`, `VK_ESCAPE`, and focus loss (`WM_KILLFOCUS`).
+- [ ] Task: Implement parsing (0-100 -> 0.0-1.0) and single-write commit logic.
+- [ ] Task: Unit tests for numeric parsing, clamping, and commit behavior.
+- [ ] Task: Conductor - User Manual Verification 'Phase 5: Numeric Entry' (Protocol in workflow.md)
+
+## Phase 6: Preset Cycling
+**Goal:** Implement the preset cycling action.
+
+- [ ] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
+- [ ] Task: Handle empty or invalid preset configurations gracefully.
+- [ ] Task: Connect preset cycling to the hotkey action.
+- [ ] Task: Unit tests for cycling order and edge cases.
+- [ ] Task: Conductor - User Manual Verification 'Phase 6: Preset Cycling' (Protocol in workflow.md)
+
+## Phase 7: UI Polish & Final Integration
+**Goal:** Finalize failure indicators and ensure consistency across all input paths.
+
+- [ ] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
+- [ ] Task: Verify all input paths (Keys, Wheel, Numeric) share the same idempotent write pipeline.
+- [ ] Task: Final end-to-end manual verification of all features.
+- [ ] Task: Conductor - User Manual Verification 'Phase 7: UI Polish & Final Integration' (Protocol in workflow.md)

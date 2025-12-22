@@ -4,5 +4,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [~] Track: Monitor Identity and Advanced Control
-*Link: [./conductor/tracks/monitor_identity_20251222/](./conductor/tracks/monitor_identity_20251222/)*
+## [~] Track: Enhanced Input & Hotkeys
+*Link: [./conductor/tracks/enhanced_input_20251222/](./conductor/tracks/enhanced_input_20251222/)*

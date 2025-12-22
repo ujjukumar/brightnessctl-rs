@@ -68,7 +68,7 @@ unsafe impl Sync for Monitor {}
 #[derive(Default)]
 pub struct AppState {
     pub monitors: Vec<Monitor>,
-    pub brightness: Vec<u32>,
+    pub brightness: Vec<f32>, // Normalized 0.0 - 1.0
     pub settings: Settings,
     pub status_message: String,
     pub hover_monitor_idx: Option<usize>,
@@ -79,9 +79,56 @@ pub struct AppState {
 impl AppState {
     pub fn apply_sync_delta(&mut self, _dragged_idx: usize, delta: f32) {
         for i in 0..self.brightness.len() {
-            let cur_pct = self.brightness[i] as f32 / 100.0;
-            let target_pct = (cur_pct + delta).clamp(0.0, 1.0);
-            self.brightness[i] = (target_pct * 100.0) as u32;
+            let target_pct = (self.brightness[i] + delta).clamp(0.0, 1.0);
+            self.brightness[i] = target_pct;
+        }
+    }
+
+    /// Determines which monitors should be affected based on current state and targeting rules.
+    pub fn get_target_indices(&self) -> Vec<usize> {
+        if self.lock_mode {
+            // Lock Mode Active -> Global (all monitors)
+            (0..self.monitors.len()).collect()
+        } else {
+            // Lock Mode Inactive
+            // If hover -> that monitor
+            if let Some(idx) = self.hover_monitor_idx {
+                vec![idx]
+            } else if let Some(idx) = self.active_monitor_idx {
+                // If focus (active) -> that monitor
+                vec![idx]
+            } else if !self.monitors.is_empty() {
+                // Else -> Primary (deterministic fallback to 0)
+                vec![0]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    pub fn apply_step(&mut self, indices: &[usize], delta: f32) {
+        for &idx in indices {
+            if idx < self.brightness.len() {
+                let old_val = self.brightness[idx];
+                let new_val = (old_val + delta).clamp(0.0, 1.0);
+                
+                // Idempotency check
+                if (new_val - old_val).abs() > 0.0001 {
+                    self.brightness[idx] = new_val;
+                }
+            }
+        }
+    }
+
+    pub fn set_absolute(&mut self, indices: &[usize], value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        for &idx in indices {
+            if idx < self.brightness.len() {
+                // Idempotency check
+                if (self.brightness[idx] - value).abs() > 0.0001 {
+                    self.brightness[idx] = value;
+                }
+            }
         }
     }
 }
@@ -93,24 +140,114 @@ mod tests {
     #[test]
     fn test_sync_delta_logic() {
         let mut state = AppState::default();
-        state.brightness = vec![10, 50, 90];
+        state.brightness = vec![0.1, 0.5, 0.9];
         
         // +10%
         state.apply_sync_delta(0, 0.1);
-        assert_eq!(state.brightness[0], 20);
-        assert_eq!(state.brightness[1], 60);
-        assert_eq!(state.brightness[2], 100);
+        assert!((state.brightness[0] - 0.2).abs() < 0.001);
+        assert!((state.brightness[1] - 0.6).abs() < 0.001);
+        assert!((state.brightness[2] - 1.0).abs() < 0.001);
 
         // +10% more (Saturation test)
         state.apply_sync_delta(0, 0.1);
-        assert_eq!(state.brightness[0], 30);
-        assert_eq!(state.brightness[1], 70);
-        assert_eq!(state.brightness[2], 100); // Stay at 100
+        assert!((state.brightness[0] - 0.3).abs() < 0.001);
+        assert!((state.brightness[1] - 0.7).abs() < 0.001);
+        assert!((state.brightness[2] - 1.0).abs() < 0.001); // Stay at 1.0
 
         // -20% (Reverse movement test)
         state.apply_sync_delta(0, -0.2);
-        assert_eq!(state.brightness[0], 10);
-        assert_eq!(state.brightness[1], 50);
-        assert_eq!(state.brightness[2], 80); // Move from 100
+        assert!((state.brightness[0] - 0.1).abs() < 0.001);
+        assert!((state.brightness[1] - 0.5).abs() < 0.001);
+        assert!((state.brightness[2] - 0.8).abs() < 0.001); // Move from 1.0
+    }
+
+    #[test]
+    fn test_step_arithmetic() {
+        let mut state = AppState::default();
+        state.brightness = vec![0.5];
+        
+        // Step up
+        state.apply_step(&[0], 0.1);
+        assert!((state.brightness[0] - 0.6).abs() < 0.001);
+
+        // Step down
+        state.apply_step(&[0], -0.2);
+        assert!((state.brightness[0] - 0.4).abs() < 0.001);
+
+        // Clamp upper
+        state.apply_step(&[0], 0.7);
+        assert_eq!(state.brightness[0], 1.0);
+
+        // Clamp lower
+        state.apply_step(&[0], -1.2);
+        assert_eq!(state.brightness[0], 0.0);
+        
+        // Idempotency
+        state.apply_step(&[0], 0.0);
+        assert_eq!(state.brightness[0], 0.0);
+    }
+
+    #[test]
+    fn test_set_absolute() {
+        let mut state = AppState::default();
+        state.brightness = vec![0.5, 0.5];
+
+        state.set_absolute(&[0], 0.8);
+        assert_eq!(state.brightness[0], 0.8);
+        assert_eq!(state.brightness[1], 0.5);
+
+        // Clamp
+        state.set_absolute(&[1], 1.5);
+        assert_eq!(state.brightness[1], 1.0);
+
+        state.set_absolute(&[1], -0.5);
+        assert_eq!(state.brightness[1], 0.0);
+    }
+
+    #[test]
+    fn test_targeting_rules() {
+        let mut state = AppState::default();
+        // Add dummy monitors
+        for _ in 0..3 {
+            state.monitors.push(Monitor {
+                physical: HANDLE(std::ptr::null_mut()),
+                name: "Test".to_string(),
+                identity: None,
+                normalized_value: 0.5,
+                last_set_by_app: false,
+                write_confirmed: false,
+                timestamp: 0,
+                device_path: "".to_string(),
+                last_write_time: None,
+                failure_count: 0,
+                is_disabled: false,
+                hardware_min: 0,
+                hardware_max: 100,
+                observed_min: 0,
+                observed_max: 100,
+            });
+        }
+
+        // Case 1: Lock mode active -> Global
+        state.lock_mode = true;
+        assert_eq!(state.get_target_indices(), vec![0, 1, 2]);
+
+        // Case 2: Lock mode inactive, hover exists -> Hovered monitor
+        state.lock_mode = false;
+        state.hover_monitor_idx = Some(1);
+        assert_eq!(state.get_target_indices(), vec![1]);
+
+        // Case 3: Lock mode inactive, no hover, active monitor exists -> Active monitor
+        state.hover_monitor_idx = None;
+        state.active_monitor_idx = Some(2);
+        assert_eq!(state.get_target_indices(), vec![2]);
+
+        // Case 4: Lock mode inactive, no hover, no active -> Primary (0)
+        state.active_monitor_idx = None;
+        assert_eq!(state.get_target_indices(), vec![0]);
+
+        // Case 5: Empty monitors
+        state.monitors.clear();
+        assert_eq!(state.get_target_indices(), Vec::<usize>::new());
     }
 }

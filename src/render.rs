@@ -275,8 +275,8 @@ impl Renderer {
                 );
                 
                 // Brightness percentage (right aligned)
-                let brightness = state.brightness[i];
-                let pct_text: Vec<u16> = format!("{}%", brightness).encode_utf16().collect();
+                let brightness_normalized = state.brightness[i];
+                let pct_text: Vec<u16> = format!("{}%", (brightness_normalized * 100.0).round() as u32).encode_utf16().collect();
                 rt.DrawText(
                     &pct_text,
                     self.text_format_label.as_ref().unwrap(),
@@ -315,7 +315,7 @@ impl Renderer {
                 rt.FillRectangle(&track_rect, &track_brush);
 
                 // Slider Fill
-                let fill_width = slider_width * (brightness as f32 / 100.0);
+                let fill_width = slider_width * brightness_normalized;
                 let fill_rect = D2D_RECT_F {
                     left: margin_x,
                     top: track_rect.top,
