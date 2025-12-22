@@ -1,4 +1,4 @@
-use crate::state::AppState;
+﻿use crate::state::AppState;
 use windows::core::{Interface, Result, w};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows_numerics::Vector2;
@@ -102,7 +102,6 @@ impl Renderer {
             return Ok(());
         }
 
-        // If theme changed, we need to re-create brushes even if RT exists
         if self.current_theme_is_dark != Some(is_dark) {
              self.brush_bg = None;
              self.brush_fg = None;
@@ -244,14 +243,30 @@ impl Renderer {
 
             for (i, monitor) in state.monitors.iter().enumerate() {
                 // Monitor Name (Label)
-                let name: Vec<u16> = monitor.name.encode_utf16().collect();
+                let display_name = if let Some(ident) = &monitor.identity {
+                    format!("{} {}", ident.manufacturer_id, ident.serial)
+                } else {
+                    monitor.name.clone()
+                };
+
+                let ddc_status = if monitor.is_disabled {
+                    "Disabled"
+                } else if monitor.write_confirmed {
+                    "DDC Active"
+                } else {
+                    "High-level"
+                };
+
+                let label_text = format!("{} â€¢ {}", display_name, ddc_status);
+                let name: Vec<u16> = label_text.encode_utf16().collect();
+                
                 rt.DrawText(
                     &name,
                     self.text_format_label.as_ref().unwrap(),
                     &D2D_RECT_F {
                         left: margin_x,
                         top: y,
-                        right: rect.right as f32 - margin_x - 60.0, // Space for percentage
+                        right: rect.right as f32 - margin_x - 60.0,
                         bottom: y + 16.0,
                     },
                     self.brush_subdued.as_ref().unwrap(),
@@ -351,8 +366,16 @@ impl Renderer {
                 None,
             );
 
-            if !state.status_message.is_empty() {
-                let status_text: Vec<u16> = state.status_message.encode_utf16().collect();
+            let mut status_msg = state.status_message.clone();
+            if state.lock_mode {
+                if !status_msg.is_empty() {
+                    status_msg.push_str(" | ");
+                }
+                status_msg.push_str("SYNC ACTIVE");
+            }
+
+            if !status_msg.is_empty() {
+                let status_text: Vec<u16> = status_msg.encode_utf16().collect();
                 rt.DrawText(
                     &status_text,
                     self.text_format_label.as_ref().unwrap(),
@@ -366,6 +389,46 @@ impl Renderer {
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+            }
+
+            // Overlay Tooltip
+            if let Some(idx) = state.hover_monitor_idx {
+                if let Some(m) = state.monitors.get(idx) {
+                    let mut tooltip_text = format!("Name: {}\nRange: {} - {}\nPath: {}", m.name, m.hardware_min, m.hardware_max, m.device_path);
+                    if let Some(ident) = &m.identity {
+                        tooltip_text.push_str(&format!("\nMFG: {}\nCode: {}\nSerial: {}", ident.manufacturer_id, ident.product_code, ident.serial));
+                    }
+                    let text_wide: Vec<u16> = tooltip_text.encode_utf16().collect();
+
+                    let tt_width = 300.0;
+                    let tt_height = 100.0;
+                    let tt_x = margin_x;
+                    let tt_y = rect.bottom as f32 - status_bar_height - tt_height - 8.0;
+
+                    let tt_rect = D2D_RECT_F {
+                        left: tt_x,
+                        top: tt_y,
+                        right: tt_x + tt_width,
+                        bottom: tt_y + tt_height,
+                    };
+
+                    rt.FillRectangle(&tt_rect, self.brush_bg.as_ref().unwrap());
+                    rt.DrawRectangle(&tt_rect, self.brush_subdued.as_ref().unwrap(), 1.0, None);
+
+                    rt.DrawText(
+                        &text_wide,
+                        self.text_format_label.as_ref().unwrap(),
+                        &D2D_RECT_F {
+                            left: tt_x + 8.0,
+                            top: tt_y + 8.0,
+                            right: tt_x + tt_width - 8.0,
+                            bottom: tt_y + tt_height - 8.0,
+                        },
+                        self.brush_fg.as_ref().unwrap(),
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
             }
 
             let _ = rt.EndDraw(None, None);

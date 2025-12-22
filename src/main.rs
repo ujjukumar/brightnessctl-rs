@@ -71,13 +71,18 @@ fn main() -> Result<()> {
             status_message: "Ready".to_string(),
             hover_monitor_idx: None,
             active_monitor_idx: None,
+            lock_mode: false,
         });
 
         RENDERER = Some(render::Renderer::new()?);
 
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
-        let _hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
+        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
+
+        if let Some(state) = APP_STATE.as_ref() {
+            update_theme_menu(hwnd, state);
+        }
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -90,6 +95,15 @@ fn main() -> Result<()> {
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+
+unsafe fn update_theme_menu(window: HWND, state: &AppState) {
+    let hmenu = GetMenu(window);
+    let theme = state.settings.theme;
+    
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_AUTO as u32, if theme == crate::settings::ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_LIGHT as u32, if theme == crate::settings::ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_DARK as u32, if theme == crate::settings::ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
+}
 
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
@@ -115,10 +129,27 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
+                    menu::IDM_LOCK_MODE => {
+                        if let Some(state) = APP_STATE.as_mut() {
+                            state.lock_mode = !state.lock_mode;
+                            
+                            let hmenu = GetMenu(window);
+                            let check = if state.lock_mode { MF_CHECKED } else { MF_UNCHECKED };
+                            let _ = CheckMenuItem(hmenu, menu::IDM_LOCK_MODE as u32, check.0);
+
+                            state.status_message = if state.lock_mode {
+                                "Sync Mode Active".to_string()
+                            } else {
+                                "Sync Mode Disabled".to_string()
+                            };
+                            let _ = InvalidateRect(Some(window), None, false);
+                        }
+                    }
                     menu::IDM_THEME_AUTO => {
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Auto;
                             let _ = state.settings.save();
+                            update_theme_menu(window, state);
                             state.status_message = "Theme set to Auto".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
@@ -127,6 +158,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Light;
                             let _ = state.settings.save();
+                            update_theme_menu(window, state);
                             state.status_message = "Theme set to Light".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
@@ -135,6 +167,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = APP_STATE.as_mut() {
                             state.settings.theme = crate::settings::ThemeMode::Dark;
                             let _ = state.settings.save();
+                            update_theme_menu(window, state);
                             state.status_message = "Theme set to Dark".to_string();
                             let _ = InvalidateRect(Some(window), None, false);
                         }
@@ -268,15 +301,26 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
 
         // Processing movement/drag
         if let Some(idx) = DRAGGING_MONITOR_IDX {
-            let pct = ((x as f32 - margin_x) / slider_width).clamp(0.0, 1.0);
-            let new_val = (pct * 100.0) as u32;
+            let new_pct = ((x as f32 - margin_x) / slider_width).clamp(0.0, 1.0);
+            let old_pct = state.brightness[idx] as f32 / 100.0;
+            let delta = new_pct - old_pct;
 
-            if state.brightness[idx] != new_val {
-                state.brightness[idx] = new_val;
-                
-                // Hardware update
-                let m = &mut state.monitors[idx];
-                brightness::set_brightness(m, new_val);
+            if delta.abs() > 0.001 {
+                if state.lock_mode {
+                    state.apply_sync_delta(idx, delta);
+                    // Hardware update for all
+                    for (i, m) in state.monitors.iter_mut().enumerate() {
+                        let val = state.brightness[i];
+                        brightness::set_brightness(m, val);
+                    }
+                } else {
+                    let target_val = (new_pct * 100.0) as u32;
+                    if state.brightness[idx] != target_val {
+                        state.brightness[idx] = target_val;
+                        let m = &mut state.monitors[idx];
+                        brightness::set_brightness(m, target_val);
+                    }
+                }
                 
                 // Repaint
                 let _ = InvalidateRect(Some(window), None, false);

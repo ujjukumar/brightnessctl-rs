@@ -1,8 +1,8 @@
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Devices::Display::{DestroyPhysicalMonitors, PHYSICAL_MONITOR};
 use serde::{Serialize, Deserialize};
-
 use crate::settings::{Settings, MonitorState};
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MonitorIdentity {
@@ -17,8 +17,6 @@ impl MonitorIdentity {
         format!("{}:{}:{}", self.manufacturer_id, self.product_code, self.serial)
     }
 }
-
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct Monitor {
@@ -53,13 +51,11 @@ impl Monitor {
 }
 
 impl Drop for Monitor {
-// ...
     fn drop(&mut self) {
         unsafe {
             if !self.physical.is_invalid() {
                 let mut pm = PHYSICAL_MONITOR::default();
                 pm.hPhysicalMonitor = self.physical;
-                // Try passing slice, assuming idiomatic windows-rs
                 let _ = DestroyPhysicalMonitors(&[pm]); 
             }
         }
@@ -77,4 +73,44 @@ pub struct AppState {
     pub status_message: String,
     pub hover_monitor_idx: Option<usize>,
     pub active_monitor_idx: Option<usize>,
+    pub lock_mode: bool,
+}
+
+impl AppState {
+    pub fn apply_sync_delta(&mut self, _dragged_idx: usize, delta: f32) {
+        for i in 0..self.brightness.len() {
+            let cur_pct = self.brightness[i] as f32 / 100.0;
+            let target_pct = (cur_pct + delta).clamp(0.0, 1.0);
+            self.brightness[i] = (target_pct * 100.0) as u32;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_delta_logic() {
+        let mut state = AppState::default();
+        state.brightness = vec![10, 50, 90];
+        
+        // +10%
+        state.apply_sync_delta(0, 0.1);
+        assert_eq!(state.brightness[0], 20);
+        assert_eq!(state.brightness[1], 60);
+        assert_eq!(state.brightness[2], 100);
+
+        // +10% more (Saturation test)
+        state.apply_sync_delta(0, 0.1);
+        assert_eq!(state.brightness[0], 30);
+        assert_eq!(state.brightness[1], 70);
+        assert_eq!(state.brightness[2], 100); // Stay at 100
+
+        // -20% (Reverse movement test)
+        state.apply_sync_delta(0, -0.2);
+        assert_eq!(state.brightness[0], 10);
+        assert_eq!(state.brightness[1], 50);
+        assert_eq!(state.brightness[2], 80); // Move from 100
+    }
 }

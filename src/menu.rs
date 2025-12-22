@@ -7,6 +7,7 @@ pub const IDM_THEME_AUTO: u16 = 103;
 pub const IDM_THEME_LIGHT: u16 = 104;
 pub const IDM_THEME_DARK: u16 = 105;
 pub const IDM_ABOUT: u16 = 106;
+pub const IDM_LOCK_MODE: u16 = 107;
 
 pub unsafe fn create_menu_bar() -> Result<HMENU> {
     let hmenu = CreateMenu()?;
@@ -19,6 +20,7 @@ pub unsafe fn create_menu_bar() -> Result<HMENU> {
     // View Menu
     let hview = CreatePopupMenu()?;
     AppendMenuW(hview, MF_STRING, IDM_REFRESH as usize, w!("Refresh Monitors"))?;
+    AppendMenuW(hview, MF_STRING, IDM_LOCK_MODE as usize, w!("Sync All Monitors (Lock)"))?;
     AppendMenuW(hmenu, MF_POPUP, hview.0 as usize, w!("&View"))?;
 
     // Theme Menu

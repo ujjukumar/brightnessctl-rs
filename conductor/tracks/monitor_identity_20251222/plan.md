@@ -28,7 +28,7 @@ Goals: Implement rate-limiting, failure backoff, and smart startup logic.
 ## Phase 4: Synchronization & UI Polish
 Goals: Implement "Lock Mode" logic and update the UI with metadata and tooltips.
 
-- [ ] Task: Logic - Implement normalized space synchronization for "Lock Mode"
+- [~] Task: Logic - Implement normalized space synchronization for "Lock Mode"
 - [ ] Task: UI - Add "Lock/Sync" toggle and update monitor list with connection/DDC labels
 - [ ] Task: UI - Implement hover tooltips for detailed monitor information
 - [ ] Task: TDD - Unit tests for normalized synchronization math, including mixed min/max ranges, early saturation, and reverse movement
