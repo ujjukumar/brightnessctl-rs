@@ -17,7 +17,7 @@
 - [x] Task: Unit tests for settings serialization and preset preservation.
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Configuration & Metadata' (Protocol in workflow.md)
 
-## Phase 3: Global Hotkeys
+## Phase 3: Global Hotkeys [checkpoint: 7523bc3]
 **Goal:** Implement system-wide hotkey registration and handling.
 
 - [x] Task: Implement `HotkeyManager` to wrap Win32 `RegisterHotKey` and `UnregisterHotKey`.
@@ -30,7 +30,7 @@
 ## Phase 4: Mouse Wheel Support
 **Goal:** Add hover-based scroll support for sliders.
 
-- [ ] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
+- [~] Task: Implement hover detection in `window.rs` or `render.rs` to identify the topmost slider.
 - [ ] Task: Handle `WM_MOUSEWHEEL` and map deltas to normalized space (0.0-1.0).
 - [ ] Task: Implement coarse vs fine (`Shift`) increments.
 - [ ] Task: Ensure wheel events are rate-limited and use the provenance-aware write path.
