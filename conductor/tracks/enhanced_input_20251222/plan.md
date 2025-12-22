@@ -59,7 +59,7 @@
 ## Phase 7: UI Polish & Final Integration
 **Goal:** Finalize failure indicators and ensure consistency across all input paths.
 
-- [~] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
-- [ ] Task: Verify all input paths (Keys, Wheel, Numeric) share the same idempotent write pipeline.
-- [ ] Task: Final end-to-end manual verification of all features.
-- [ ] Task: Conductor - User Manual Verification 'Phase 7: UI Polish & Final Integration' (Protocol in workflow.md)
+- [x] Task: Implement UI indicator (e.g., tooltip or icon) for hotkey registration failures.
+- [x] Task: Verify all input paths (Keys, Wheel, Numeric) share the same idempotent write pipeline.
+- [x] Task: Final end-to-end manual verification of all features.
+- [x] Task: Conductor - User Manual Verification 'Phase 7: UI Polish & Final Integration' (Protocol in workflow.md)

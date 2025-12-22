@@ -387,6 +387,15 @@ impl Renderer {
                 status_msg.push_str("SYNC ACTIVE");
             }
 
+            // Show hotkey failure warning if any
+            let failed_count = state.hotkey_status.values().filter(|&&v| !v).count();
+            if failed_count > 0 {
+                if !status_msg.is_empty() {
+                    status_msg.push_str(" | ");
+                }
+                status_msg.push_str(&format!("HOTKEY ERROR ({})", failed_count));
+            }
+
             if !status_msg.is_empty() {
                 let status_text: Vec<u16> = status_msg.encode_utf16().collect();
                 rt.DrawText(
