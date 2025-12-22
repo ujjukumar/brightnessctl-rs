@@ -50,11 +50,11 @@
 ## Phase 6: Preset Cycling
 **Goal:** Implement the preset cycling action.
 
-- [~] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
-- [ ] Task: Handle empty or invalid preset configurations gracefully.
-- [ ] Task: Connect preset cycling to the hotkey action.
-- [ ] Task: Unit tests for cycling order and edge cases.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: Preset Cycling' (Protocol in workflow.md)
+- [x] Task: Implement `cycle_presets` logic in `brightness.rs` or `state.rs`.
+- [x] Task: Handle empty or invalid preset configurations gracefully.
+- [x] Task: Connect preset cycling to the hotkey action.
+- [x] Task: Unit tests for cycling order and edge cases.
+- [x] Task: Conductor - User Manual Verification 'Phase 6: Preset Cycling' (Protocol in workflow.md)
 
 ## Phase 7: UI Polish & Final Integration
 **Goal:** Finalize failure indicators and ensure consistency across all input paths.

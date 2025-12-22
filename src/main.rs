@@ -421,8 +421,7 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
                     state.apply_step(&targets, step);
                 }
                 Action::CyclePresets => {
-                    // Deferred to Phase 6
-                    state.status_message = "Preset cycling not yet implemented".to_string();
+                    state.cycle_presets(&targets);
                 }
             }
 

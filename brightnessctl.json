@@ -9,16 +9,16 @@
     1.0
   ],
   "hotkeys": {
+    "StepDown": {
+      "vkey": 40,
+      "modifiers": 3
+    },
     "CyclePresets": {
       "vkey": 80,
       "modifiers": 3
     },
     "StepUp": {
       "vkey": 38,
-      "modifiers": 3
-    },
-    "StepDown": {
-      "vkey": 40,
       "modifiers": 3
     }
   },

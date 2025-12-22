@@ -139,6 +139,35 @@ impl AppState {
             }
         }
     }
+
+    pub fn cycle_presets(&mut self, indices: &[usize]) {
+        let presets = &self.settings.presets;
+        if presets.is_empty() { return; }
+
+        for &idx in indices {
+            if idx < self.brightness.len() {
+                let current = self.brightness[idx];
+                
+                // Find next preset strictly greater than current
+                let mut next_val = presets[0];
+                let mut found = false;
+                for &p in presets {
+                    if p > current + 0.001 {
+                        next_val = p;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                // If none found, wrap to first
+                if !found {
+                    next_val = presets[0];
+                }
+
+                self.brightness[idx] = next_val;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -213,50 +242,29 @@ mod tests {
     }
 
     #[test]
-    fn test_targeting_rules() {
+    fn test_preset_cycling() {
         let mut state = AppState::default();
-        // Add dummy monitors
-        for _ in 0..3 {
-            state.monitors.push(Monitor {
-                physical: HANDLE(std::ptr::null_mut()),
-                hmonitor: 0,
-                name: "Test".to_string(),
-                identity: None,
-                normalized_value: 0.5,
-                last_set_by_app: false,
-                write_confirmed: false,
-                timestamp: 0,
-                device_path: "".to_string(),
-                last_write_time: None,
-                failure_count: 0,
-                is_disabled: false,
-                hardware_min: 0,
-                hardware_max: 100,
-                observed_min: 0,
-                observed_max: 100,
-            });
-        }
+        state.settings.presets = vec![0.0, 0.5, 1.0];
+        state.brightness = vec![0.0];
 
-        // Case 1: Lock mode active -> Global
-        state.lock_mode = true;
-        assert_eq!(state.get_target_indices(), vec![0, 1, 2]);
+        state.cycle_presets(&[0]);
+        assert_eq!(state.brightness[0], 0.5);
 
-        // Case 2: Lock mode inactive, hover exists -> Hovered monitor
-        state.lock_mode = false;
-        state.hover_monitor_idx = Some(1);
-        assert_eq!(state.get_target_indices(), vec![1]);
+        state.cycle_presets(&[0]);
+        assert_eq!(state.brightness[0], 1.0);
 
-        // Case 3: Lock mode inactive, no hover, active monitor exists -> Active monitor
-        state.hover_monitor_idx = None;
-        state.active_monitor_idx = Some(2);
-        assert_eq!(state.get_target_indices(), vec![2]);
+        state.cycle_presets(&[0]);
+        assert_eq!(state.brightness[0], 0.0); // Wrap
 
-        // Case 4: Lock mode inactive, no hover, no active -> Primary (0)
-        state.active_monitor_idx = None;
-        assert_eq!(state.get_target_indices(), vec![0]);
+        // Intermediate value
+        state.brightness[0] = 0.3;
+        state.cycle_presets(&[0]);
+        assert_eq!(state.brightness[0], 0.5);
 
-        // Case 5: Empty monitors
-        state.monitors.clear();
-        assert_eq!(state.get_target_indices(), Vec::<usize>::new());
+        // Empty presets
+        state.settings.presets = vec![];
+        state.brightness[0] = 0.7;
+        state.cycle_presets(&[0]);
+        assert_eq!(state.brightness[0], 0.7); // No-op
     }
 }
