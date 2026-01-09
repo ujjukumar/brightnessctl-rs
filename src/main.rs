@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 #![allow(static_mut_refs)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
