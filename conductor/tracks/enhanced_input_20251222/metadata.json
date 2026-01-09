@@ -1,8 +1,0 @@
-{
-  "track_id": "enhanced_input_20251222",
-  "type": "feature",
-  "status": "new",
-  "created_at": "2025-12-22T14:10:00Z",
-  "updated_at": "2025-12-22T14:10:00Z",
-  "description": "Global hotkeys for step up/down and preset cycling. Mouse wheel support on sliders with fine/coarse increments. Numeric entry box with exact values."
-}
