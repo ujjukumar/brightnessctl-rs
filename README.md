@@ -3,10 +3,21 @@
  [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
  [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
  [![Binary Size](https://img.shields.io/badge/Binary%20Size-%3C%201%20MB-brightgreen.svg)]()
+ [![GitHub Release](https://img.shields.io/github/v/release/ujjukumar/brightnessctl-rs?logo=github)](https://github.com/ujjukumar/brightnessctl-rs/releases)
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
  **brightnessctl** is an ultra-lightweight, native Windows 11 utility for controlling display brightness. Designed for power users and minimalists who demand efficiency, it provides precise control over
   both internal laptop screens and external DDC/CI desktop monitors without the overhead of heavy UI frameworks or runtimes.
+
+ ---
+
+ ## 📥 Download
+
+ Pre-built, optimized binaries are available on the [Releases](https://github.com/ujjukumar/brightnessctl-rs/releases) page:
+
+ 1. Head to [Latest Release](https://github.com/ujjukumar/brightnessctl-rs/releases/latest).
+ 2. Download the `brightnessctl-vX.Y.Z-windows-x86_64.zip` bundle (includes default config & docs) or grab the standalone `brightnessctl.exe`.
+ 3. Run `brightnessctl.exe`. No installation required!
 
  ---
 

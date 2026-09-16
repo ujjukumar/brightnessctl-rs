@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+      draft:
+        description: 'Create draft release'
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark as prerelease'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Determine tag name
+        id: vars
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = '${{ github.ref_name }}'
+          } else {
+            $tag = '${{ inputs.tag_name }}'
+          }
+          $version = $tag -replace '^v', ''
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package release artifacts
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.vars.outputs.tag }}"
+          $pkgDir = "brightnessctl-${tag}-windows-x86_64"
+          New-Item -ItemType Directory -Path "dist/$pkgDir" -Force | Out-Null
+
+          # Copy assets into package
+          Copy-Item "target/release/brightnessctl.exe" -Destination "dist/$pkgDir/brightnessctl.exe"
+          Copy-Item "brightnessctl.json" -Destination "dist/$pkgDir/brightnessctl.json"
+          Copy-Item "README.md" -Destination "dist/$pkgDir/README.md"
+          Copy-Item "LICENSE" -Destination "dist/$pkgDir/LICENSE"
+
+          # Standalone executable for direct download
+          Copy-Item "target/release/brightnessctl.exe" -Destination "dist/brightnessctl.exe"
+
+          # Create zip archive
+          Compress-Archive -Path "dist/$pkgDir/*" -DestinationPath "dist/$pkgDir.zip" -Force
+
+          # Generate SHA256 checksums
+          Push-Location dist
+          $zipHash = (Get-FileHash "$pkgDir.zip" -Algorithm SHA256).Hash
+          "$zipHash  $pkgDir.zip" | Out-File -FilePath "$pkgDir.zip.sha256" -Encoding ascii
+
+          $exeHash = (Get-FileHash "brightnessctl.exe" -Algorithm SHA256).Hash
+          "$exeHash  brightnessctl.exe" | Out-File -FilePath "brightnessctl.exe.sha256" -Encoding ascii
+
+          # Combined checksums
+          "$zipHash  $pkgDir.zip`n$exeHash  brightnessctl.exe" | Out-File -FilePath "checksums.txt" -Encoding ascii
+          Pop-Location
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: brightnessctl ${{ steps.vars.outputs.tag }}
+          draft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/brightnessctl.exe
+            dist/brightnessctl.exe.sha256
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
