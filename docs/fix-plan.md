@@ -1,0 +1,379 @@
+# Fix Plan: Audit Findings
+
+This plan addresses every issue found in a full review of the codebase (written against commit `7e277cf`). It is self-contained: `GEMINI.md` and `conductor/` are gitignored and may not exist on your machine, so the constraints and decisions that matter are repeated here.
+
+## How to use this file
+
+- Work through the items **in order**. Some later items depend on earlier ones (noted inline).
+- Check off tasks (`[x]`) as you finish them and commit the updated plan with the item's code.
+- Line numbers below refer to commit `7e277cf` and will drift as you go; search for the named function or symbol if they no longer match.
+
+---
+
+## Project constraints
+
+Still in force (from `GEMINI.md`):
+
+- Rust stable, MSVC toolchain, Windows 10/11 only.
+- UI is raw Win32 + Direct2D + DirectWrite. **No** egui, wgpu, winit, WinUI/XAML, Qt, GTK, Electron/WebView, or async runtimes.
+- Single EXE, release build **< 1 MB** (currently 217 KB). Don't change `[profile.release]`.
+- Restrained native look: Segoe UI, spacing in 8/16/24 px steps, no gradients or shadows.
+- **Zero idle CPU**: no polling. Redraw only in response to `WM_PAINT`, input, or a real state change.
+- Failing silently is fine. Never crash because of a misbehaving monitor. Log only in debug builds.
+
+Decisions made during planning (these **override** the corresponding rules in `GEMINI.md`):
+
+| Topic | Decision |
+|---|---|
+| Threads | Allowed. Use **one worker thread per monitor** for all hardware I/O (item 6). |
+| Timers | Allowed: **one-shot** timers that kill themselves (debounced save, display-change refresh). Never periodic polling. |
+| Built-in laptop panels | Use **WMI** (`root\WMI`) when Dxva2 doesn't work for a display (item 4). |
+| Broken config file | Rename it to `brightnessctl.json.bak`, continue with defaults, show the error in the status bar (item 5). |
+| Menu bar in dark mode | Leave it light. Only the title bar goes dark (item 13). |
+
+## Workflow (lightweight)
+
+- Work on a branch: `fixes/audit`.
+- **One commit per item**, using conventional commits: `fix(monitors): …`, `feat(wmi): …`, `refactor(app): …`, `test(...)`, `docs(...)`.
+- Write unit tests alongside the change wherever the logic can be tested on its own (test-first is not required).
+- After **every** item, run:
+  ```
+  cargo build
+  cargo test
+  cargo clippy
+  ```
+- After Phases 2, 3 and 6, also check the release size:
+  ```
+  cargo build --release
+  ```
+  `target\release\brightnessctl.exe` must stay under 1 MB.
+
+## Baseline at `7e277cf`
+
+- `cargo build`: OK, 4 dead-code warnings.
+- `cargo test`: 21/21 pass.
+- `cargo clippy`: 22 warnings (mostly collapsible `if`s).
+- Release binary: 221,696 bytes.
+
+## Test hardware
+
+| Machine | Displays | Good for |
+|---|---|---|
+| Desktop | Two external DDC/CI monitors: Gigabyte `GBT2402`, Acer `ACR0B96` | DDC/CI paths, sync mode, two monitors at once |
+| Laptop (Acer Aspire) | Built-in panel (plus any external monitor you connect) | WMI (item 4), DPI scaling (laptops usually default to 125–150%), device loss on hybrid graphics |
+
+- If you're on the laptop without an external monitor, you can't test the DDC/CI paths by hand. Rely on the unit tests and re-check on the desktop later.
+- Useful PowerShell checks:
+  ```powershell
+  Get-PnpDevice -Class Monitor -PresentOnly | Select InstanceId, FriendlyName
+  Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness   # built-in panel only
+  ```
+
+---
+
+## Phase 1: Confirmed bugs
+
+### 1. Fix monitor identity lookup (`monitors.rs`)
+
+**Problem (confirmed on the desktop):** `get_monitor_device_id` (`monitors.rs:64`) calls `EnumDisplayDevicesW(..., 0)`. That returns a driver-key style ID:
+
+```
+MONITOR\GBT2402\{4d36e96e-e325-11ce-bfc1-08002be10318}\0004
+```
+
+`get_edid_from_registry` (`monitors.rs:108`) compares it with SetupDi **device instance IDs**:
+
+```
+DISPLAY\GBT2402\5&145FDE2&5&UID24837
+```
+
+They never match, so `Monitor.identity` is always `None`. As a result:
+
+- brightness is never saved,
+- Smart Restore never runs,
+- labels fall back to "Generic PnP Monitor".
+
+**Verified fix:** call `EnumDisplayDevicesW` with `EDD_GET_DEVICE_INTERFACE_NAME` (`1`). It returns:
+
+```
+\\?\DISPLAY#GBT2402#5&145fde2&5&UID24837#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+```
+
+Strip the leading `\\?\`, drop the trailing `#{guid}`, and replace `#` with `\`. That gives `DISPLAY\GBT2402\5&145fde2&5&UID24837`, which matches the SetupDi ID **when compared ignoring case**.
+
+- [ ] Add a pure helper `interface_path_to_instance_id(&str) -> Option<String>`, with unit tests that use the real strings above.
+- [ ] Use `EDD_GET_DEVICE_INTERFACE_NAME` and the helper. Keep the comparison case-insensitive.
+- [ ] Look up the device ID **once** per `HMONITOR`. Today `monitor_enum_proc` calls it twice (`monitors.rs:166-167`).
+- [ ] Handle duplicated (cloned) displays, where one `HMONITOR` has several physical monitors: pair physical monitor *i* with `EnumDisplayDevicesW(adapter, i, …)`.
+- [ ] Store the instance ID in `Monitor.device_path`. Item 4 uses it to find WMI instances.
+- [ ] **Stable hash.** This was minor item 16, moved here so no unstable keys are ever saved. In `edid.rs:66-69`, replace `DefaultHasher` (its algorithm isn't guaranteed to stay the same between Rust versions) with a small inline FNV-1a 64-bit hash. Keep `test_fallback_hash_determinism` and add a test that pins a known hash value. No migration is needed: because of this bug, no identities were ever saved.
+
+**Done when:**
+- after one drag, `brightnessctl.json` has entries under `monitor_states`,
+- labels show the EDID-based name (e.g. `GBT …`),
+- the saved brightness is restored after restarting the app.
+
+### 2. Fix the garbled bullet (`render.rs:260`)
+
+**Problem (confirmed):** the source contains the bytes `C3 A2 E2 82 AC C2 A2`, which is "•" encoded as UTF-8 twice. It renders as `â€¢`.
+
+- [ ] Replace it with `\u{2022}`.
+- [ ] Search `src/` for any other non-ASCII mis-encoding.
+
+---
+
+## Phase 2: Display scaling and laptop panels
+
+### 3. Handle display scaling (DPI) correctly
+
+**Problem:** the process declares itself Per-Monitor-V2 DPI aware (`win.rs`), but:
+
+- The drawing surface is created with `D2D1_RENDER_TARGET_PROPERTIES::default()` (`render.rs:124`). DPI 0 means system DPI, so Direct2D scales everything.
+- Layout uses `GetClientRect` pixel widths as if they were device-independent units (DIPs; 96 per inch at 100% scaling).
+- Hit-testing (`main.rs:446-482`) compares raw mouse pixels with DIP-based constants.
+
+At 125% or 150% scaling the slider runs past the right edge and clicks land on the wrong values. `WM_DPICHANGED` isn't handled. The layout numbers are also written twice (`render.rs` and `handle_input`, with a "MUST match" comment).
+
+- [ ] Add `src/layout.rs`: a pure function along the lines of `compute(width_dip: f32, monitor_count: usize) -> Layout`. It returns the title rect, and for each row the label, percentage, track and hit rects, plus the status bar rect. Unit tests:
+  - rows don't overlap,
+  - each hit rect contains its track,
+  - the percentage rect is flush right,
+  - width is clamped to at least 1.
+- [ ] Use `layout::compute` in both `render.rs` and `handle_input`, and delete the duplicated constants in `main.rs`.
+- [ ] Create the drawing surface with `dpiX`/`dpiY` = `GetDpiForWindow(hwnd)`. Do all layout in DIPs: `width_dip = px * 96 / dpi`.
+- [ ] Convert mouse coordinates from pixels to DIPs before hit-testing.
+- [ ] Handle `WM_DPICHANGED`: `SetWindowPos` to the suggested rect (in `lParam`), `SetDpi` on the drawing surface, redraw.
+- [ ] Make the starting window size 400×600 **DIPs**, scaled for the window's monitor (use `AdjustWindowRectExForDpi`, which takes the menu bar into account).
+
+**Done when:**
+- at 100%, 125%, 150% and 175% the slider fits the window and clicking the thumb doesn't make it jump,
+- moving the window between monitors with different scaling rescales it.
+
+Test on the laptop's built-in screen.
+
+### 4. Support built-in laptop panels through WMI
+
+**Problem:** `GetMonitorBrightness`/`SetMonitorBrightness` (Dxva2's high-level monitor API) only work over DDC/CI. Built-in laptop panels don't support DDC/CI; Windows controls them through ACPI/WMI. There's no fallback, so a laptop panel shows 50% and is disabled after 10 failed writes. That contradicts the README.
+
+- [ ] Add a `Backend` enum to `Monitor`:
+  ```rust
+  enum Backend { HighLevel, Vcp { max: u32 }, Wmi { instance: String }, Unsupported }
+  ```
+  Choose it **once**, when monitors are detected, by trying the backends in order: HighLevel → VCP `0x10` → WMI. In item 9 this probing moves into the worker thread.
+- [ ] Add `src/wmi.rs`:
+  - connect with `IWbemLocator` (`WbemLocator` CLSID) → `ConnectServer("root\\WMI")`,
+  - read: `SELECT InstanceName, CurrentBrightness, Level FROM WmiMonitorBrightness`,
+  - write: `WmiMonitorBrightnessMethods.WmiSetBrightness(Timeout: u32 = 0, Brightness: u8 0–100)` via `ExecMethod`.
+- [ ] Match a WMI `InstanceName` to a monitor. It is expected to be the device instance ID plus a `_0` suffix (check with `Get-CimInstance` on the laptop). Strip the suffix and compare, ignoring case, with `Monitor.device_path` from item 1.
+- [ ] Add these to the `windows` features in `Cargo.toml` (both exist in windows 0.62.2):
+  - `Win32_System_Wmi`
+  - `Win32_System_Variant`
+- [ ] Unit tests for the pure parts: instance-name matching, and mapping the panel's supported levels to 0–100.
+- [ ] Re-check that the release binary is under 1 MB.
+
+**Done when:** the Acer Aspire's built-in panel can be controlled with the slider, the wheel and the hotkeys, and the desktop's DDC monitors still work.
+
+---
+
+## Phase 3: Config, background threads and saving
+
+### 5. Make the config file reliable (`settings.rs`)
+
+**Problems:**
+
+- `load()` and `save()` use the relative path `"brightnessctl.json"`, which is relative to the **working directory**, not the exe's folder as the README says.
+- If parsing fails, `load()` returns defaults **and overwrites the user's file** (`settings.rs:131-133`).
+- `theme` has no serde default, so a file without it fails to parse.
+
+Tasks:
+
+- [ ] Find the config path with `std::env::current_exe()` → parent folder → `brightnessctl.json`.
+- [ ] Put `#[serde(default)]` on the `Settings` struct so missing fields fall back to `Default`.
+- [ ] If parsing fails:
+  - rename the file to `brightnessctl.json.bak`, replacing any existing `.bak`,
+  - continue with defaults,
+  - set the status message to something like `Config error at line L, column C. Saved as .bak; using defaults` (from `serde_json::Error::line()` / `column()`).
+- [ ] Validate after loading:
+  - presets: drop NaN, clamp to 0–1,
+  - `step_size`: must be greater than 0 and at most 1, otherwise use the default.
+- [ ] Save atomically: write `brightnessctl.json.tmp`, then `std::fs::rename` over the real file.
+- [ ] Make loading and saving take a path so they can be tested. Tests, in a temporary folder:
+  - missing `theme` → defaults,
+  - invalid JSON → `.bak` created and defaults returned,
+  - out-of-range values are clamped,
+  - save then load gives the same settings.
+
+**Done when:**
+- starting the exe from a different working directory uses the config next to the exe,
+- a config with a typo ends up as `.bak` instead of being wiped.
+
+### 6. One background thread per monitor
+
+**Problems:**
+
+- All monitor I/O runs on the window's thread. A DDC/CI transaction takes roughly 40–50+ ms, and each write does a GET, a SET and a GET (`brightness.rs:69-105`), so the window freezes while it waits.
+- `set_brightness` silently drops any write within 100 ms of the previous one (`brightness.rs:56-63`). Only dragging sends a final forced write (on `WM_LBUTTONUP`). The wheel (`main.rs:361`) and hotkeys (`main.rs:399`) can therefore leave the slider showing a value the monitor never received.
+
+**Design:**
+
+- **Thread per monitor.** Add `src/worker.rs`. Each monitor gets a thread that **owns** its physical monitor handle. A WMI-backed thread calls `CoInitializeEx(COINIT_MULTITHREADED)` and owns its WMI connection.
+- **Latest-value mailbox.** Each thread has a `Mutex<Option<u32>>` + `Condvar` that holds only the newest requested value. Values in between are skipped; the final value is always written.
+- **Write spacing.** Leave at least a minimum gap between writes. Start at about 50 ms and tune on real hardware.
+- **Confirmation.** After a write, if no newer value is waiting, read the brightness back to confirm the final value. In-between writes are never read back.
+- **Reporting back.** The thread sends results to the window with `PostMessageW(hwnd, WM_APP_WRITE_DONE, monitor_index, packed_result)`: written value, success, confirmed. `HWND` isn't `Send`, so pass it as an `isize`. The window thread keeps the failure count and sets `disabled` after 10 failures.
+- **Window side.** Add a single entry point, `request_brightness(targets, value)`, used by drag, wheel, hotkey, typed value and presets. The slider value updates immediately, and the request is posted to each target's thread.
+
+Tasks:
+
+- [ ] Put hardware access behind a trait, e.g. `trait BrightnessBackend { fn read(&mut self) -> Option<u32>; fn write(&mut self, v: u32) -> bool; }`, so worker logic can be tested with a fake backend.
+- [ ] Implement the worker and the mailbox as described above.
+- [ ] Route **all** input paths through `request_brightness`.
+- [ ] Remove the rate limiter (`last_write_time`) and `set_brightness_forced`.
+- [ ] Keep brightness **only on `Monitor`** (`ui_value` + `confirmed_value`). Remove `AppState.brightness` and `Monitor.normalized_value`, which duplicate it. (This covers item 21.)
+- [ ] Remove `unsafe impl Send/Sync for Monitor` (`state.rs:66-67`). Use a small wrapper around just the physical monitor handle that is `Send`.
+- [ ] Shutdown and refresh: tell the threads to stop, join them, **then** call `DestroyPhysicalMonitors`.
+- [ ] Unit tests with a fake backend and a controllable clock:
+  - ten fast requests → only the last is written,
+  - the minimum gap is respected,
+  - a read-back happens only once no new value is waiting,
+  - failures are reported back.
+
+**Done when:**
+- after fast scrolling, holding a hotkey, or dragging in sync mode, every monitor ends up at the value its slider shows,
+- the window never stalls during a drag.
+
+### 7. Save brightness when it actually changes
+
+**Problem:** settings are saved only in `WM_LBUTTONUP` (`main.rs:272-306`), and on **every** mouse release, even clicks on empty space. Changes from hotkeys, the wheel and typed values are never saved. It also saves the slider's value instead of the value confirmed by the monitor.
+
+- [ ] When a `WM_APP_WRITE_DONE` message for a successful write arrives, mark settings as dirty and restart a **one-shot timer of about 1 s**. When it fires, save and kill the timer.
+- [ ] If anything is unsaved, save it on `WM_CLOSE` and `WM_ENDSESSION`.
+- [ ] Save `confirmed_value` (the value that was actually written), not the slider's value.
+- [ ] Remove the save from `WM_LBUTTONUP`.
+- [ ] Tests: the dirty flag is set and cleared correctly, and a click with no brightness change doesn't mark anything dirty.
+
+---
+
+## Phase 4: Robustness
+
+### 8. Recover from graphics device loss (`render.rs`)
+
+**Problem:** the result of `EndDraw` is ignored (`render.rs:456`). After `D2DERR_RECREATE_TARGET` (driver reset, GPU switch, some remote desktop sessions), the drawing surface is never recreated. Also, `Resize` is called on every paint.
+
+- [ ] Check the `EndDraw` result. On `D2DERR_RECREATE_TARGET`, throw away only the device-dependent resources (drawing surface and brushes, but keep the text formats) and redraw.
+- [ ] Add `Renderer::resize(w, h)` and call it from `WM_SIZE`. Remove the per-paint `Resize`.
+
+**Done when:** after pressing **Win+Ctrl+Shift+B** (restarts the graphics driver), the window draws correctly again. Test on both machines.
+
+### 9. Open the window instantly
+
+**Problem:** `main` finds the monitors, reads them over DDC and applies Smart Restore writes before the window is even created (`main.rs:44-87`). With DDC delays that can take hundreds of milliseconds or more.
+
+- [ ] Create and show the window first, then `PostMessageW(WM_APP_INIT)`.
+- [ ] In `WM_APP_INIT`, find the monitors. This only reads the registry and SetupDi and doesn't talk to the monitors.
+- [ ] Start one worker per monitor. Each one:
+  - chooses its `Backend` (moved here from item 4),
+  - reads the current brightness,
+  - applies Smart Restore if there's a saved state with `last_set_by_app && write_confirmed`,
+  - posts `WM_APP_MONITOR_READY` with its backend and current value.
+- [ ] Until a monitor reports ready, its row shows `Detecting…` and its slider ignores input.
+- [ ] Debug builds only: log the time until the window appears and how long each write takes.
+
+**Done when:** the window appears instantly, sliders become active as each monitor reports in, and dragging is smooth on both desktop monitors.
+
+---
+
+## Phase 5: Input and UI correctness
+
+### 10. Fix typed-value editing
+
+**Problems:**
+
+- Clicking elsewhere throws the typed value away (`main.rs:496,501`), but the spec says it should be committed.
+- `WM_KILLFOCUS` isn't handled.
+- `ch as u8 as char` (`main.rs:347`) cuts UTF-16 characters down to one byte, so some non-ASCII keys are read as digits.
+
+Tasks:
+
+- [ ] Add a pure `parse_percent(&str) -> Option<f32>`. Tests:
+
+  | Input | Result |
+  |---|---|
+  | `""` | `None` |
+  | `"0"` | `0.0` |
+  | `"100"` | `1.0` |
+  | `"150"` | `1.0` |
+  | `"abc"` | `None` |
+
+- [ ] Use `char::from_u32(ch as u32)` and accept only ASCII digits.
+- [ ] Commit the typed value when the user clicks elsewhere (including another monitor's label) and on `WM_KILLFOCUS`. `Esc` still cancels.
+- [ ] Commit through `request_brightness` (item 6).
+
+### 11. Show the correct control method in labels
+
+**Problem:** the label says "DDC Active" when `write_confirmed` is true (`render.rs:252-258`). That is also true for the high-level API, and before any write every monitor shows "High-level".
+
+- [ ] Build the label from `Backend` and the monitor's state, with a unit test:
+
+  | Monitor state | Label |
+  |---|---|
+  | `HighLevel` | `DDC/CI` |
+  | `Vcp` | `DDC/CI (VCP)` |
+  | `Wmi` | `WMI` |
+  | `Unsupported` | `Unsupported` |
+  | disabled | `Disabled` |
+  | not ready yet | `Detecting…` |
+
+---
+
+## Phase 6: Minor issues
+
+- [ ] **12. Flicker.** Handle `WM_ERASEBKGND` by returning 1. Remove `hbrBackground` (`window.rs:25`); that brush is also never freed.
+- [ ] **13. Theme.**
+  - Turn on a dark title bar with `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` (add the `Win32_Graphics_Dwm` feature) and update it when the theme changes.
+  - Remember the system dark-mode flag instead of reading the registry on every paint (`render.rs:203` → `settings.rs:95`).
+  - Refresh the flag on `WM_SETTINGCHANGE` when `lParam` is `"ImmersiveColorSet"`.
+  - The menu bar **stays light** (decision).
+- [ ] **14. Brushes.** Stop creating `track_brush` and `accent_brush` on every paint (`render.rs:327,344`). Create them once and change their color with `SetColor` for hover and active states.
+- [ ] **15. Brightness math.**
+  - Scale high-level API values to 0–100 using the min/max it returns (`brightness.rs:21-24`).
+  - Round instead of truncating in VCP conversions (`brightness.rs:35,84`).
+  - Put the conversions in pure functions and test round trips for max = 100, 255 and 50.
+- [x] ~~**16. Stable hash**~~: moved into item 1.
+- [ ] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
+- [ ] **18. Refresh.**
+  - Make `IDM_REFRESH` (`main.rs:159-173`) stop and join the worker threads, find the monitors again, and use the startup path, including Smart Restore.
+  - Reset the hover, active, editing and drag indexes.
+  - Refresh automatically on `WM_DISPLAYCHANGE`, delayed with a one-shot timer of about 500 ms.
+
+## Phase 7: Code structure and tests
+
+- [ ] **19. Remove the global state.** Replace the `static mut` globals (`main.rs:32-37`) with an `App` struct. Pass it through `CreateWindowExW`'s `lpParam`, store it in `GWLP_USERDATA` during `WM_NCCREATE`, and fetch it in `wnd_proc`. Remove `#![allow(static_mut_refs)]`.
+  - Don't hold a `&mut App` across calls that run their own message loop, such as `MessageBoxW` in About.
+  - Worker threads never touch `App`; they only post messages.
+- [x] **20.** Layout defined twice: done in item 3.
+- [x] **21.** Brightness stored in several places: done in item 6.
+- [ ] **22. Remove unused code and warnings.**
+  - Remove the unused `Target` and `Command` (`actions.rs:23,29`), `should_restore` (`brightness.rs:124`, used only by its own test) and `is_registered` (`hotkeys.rs:46`).
+  - Fix every `cargo clippy --all-targets` warning.
+  - Add `cargo clippy --all-targets --locked -- -D warnings` to `.github/workflows/ci.yml`.
+- [ ] **23. Fix the tests.**
+  - `test_backoff_escalation` (`brightness.rs:155`) copies the logic instead of calling it. Move failure handling into a real function, e.g. `record_failure()`, and test that.
+  - Remove the always-true `assert!(monitors.len() >= 0)` (`monitors.rs:204`).
+  - Add tests for the wheel step size: fine step with `Shift`, coarse without.
+  - Mark tests that need real monitors with `#[ignore]`.
+
+## Phase 8: Documentation
+
+- [ ] **24. README.**
+  - Default step size is 0.1, not 0.05 (`README.md:84`).
+  - The config file lives next to the exe, and a broken config is backed up to `.bak`.
+  - Built-in laptop panels are supported through WMI (`README.md:32`).
+  - Startup is now instant (monitors are detected after the window opens).
+- [ ] **25. Local docs.** These files are gitignored, so do this only on a machine where they exist:
+  - Update `GEMINI.md` and `conductor/tech-stack.md`:
+    - built-in panels are controlled through WMI,
+    - per-monitor worker threads are allowed,
+    - one-shot timers are allowed,
+    - fix the wrong claim that "Dxva2 controls internal displays".
+  - Correct the acceptance-criteria checkboxes in `conductor/tracks/enhanced_input_20251222/spec.md`.
