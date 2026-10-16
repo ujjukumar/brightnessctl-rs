@@ -1,0 +1,371 @@
+# AGENTS.md: brightnessctl
+
+Reference for anyone (human or AI agent) working on this repository. This file replaces the former `GEMINI.md` and `conductor/` files.
+
+**Active work:** [`docs/fix-plan.md`](fix-plan.md). Read it before changing code. Where the current code doesn't match the rules below, the fix plan item that resolves it is noted as *(→ fix plan #N)*.
+
+---
+
+## 1. Product
+
+A native, professional Windows brightness controller for power users and multi-monitor setups. It controls built-in laptop panels and external DDC/CI monitors with one slider per display.
+
+**Success criteria:**
+- Instant startup.
+- Release EXE **< 1 MB**.
+- **Zero idle CPU.**
+- Native Windows 11 look.
+- No framework bloat.
+
+**Tone:** a system utility, not a consumer app. Labels are short and messages purely informative. No chatty language or filler.
+
+---
+
+## 2. Hard constraints
+
+| Area | Rule |
+|---|---|
+| Language | Rust stable, **MSVC** toolchain, edition 2024 |
+| Platform | Windows 10/11 x64 only |
+| UI | Raw **Win32 + Direct2D + DirectWrite**. GDI only as a fallback. |
+| Banned | egui, wgpu, winit, WinUI/XAML/MAUI/WPF, Qt, GTK, Electron/WebView, cross-platform UI crates, async runtimes |
+| Brightness APIs | **Dxva2** high-level monitor API and **DDC/CI** (VCP code `0x10`). **WMI** (`root\WMI`) only for displays where Dxva2 fails, i.e. built-in laptop panels. |
+| Output | A single EXE from `cargo build --release`. No installer, no runtime dependencies. |
+| Dependencies | `windows`, `windows-numerics`, `serde`, `serde_json`. Add a new crate only with a strong reason; check its effect on binary size. |
+
+### Runtime rules
+
+- **No polling.** Redraw only on `WM_PAINT`, input, or a real state change.
+- **Timers:** only **one-shot** timers that kill themselves (debounced save, delayed display-change refresh). Never periodic.
+- **Threads:** allowed **only for monitor I/O**, with one worker thread per monitor *(→ fix plan #6)*:
+  - workers talk to the window thread only through `PostMessageW`,
+  - they never touch UI or app state,
+  - the window thread never blocks on monitor I/O.
+- **No global mutable state.** Keep app state in a struct reached through the window (`GWLP_USERDATA`). *(Currently `static mut` → fix plan #19.)*
+- **Errors:**
+  - failing silently is acceptable,
+  - **never crash because of a misbehaving monitor**,
+  - log only in debug builds,
+  - no dialogs except Help → About.
+- Release builds use `panic = "abort"`, so a panic kills the app. Don't `unwrap` hardware results, and check indexes before using them.
+
+### Release profile (do not change)
+
+```toml
+[profile.release]
+opt-level = "z"
+lto = "fat"
+panic = "abort"
+strip = "symbols"
+codegen-units = 1
+incremental = false
+```
+
+The release binary was 221,696 bytes (about 217 KB) at commit `7e277cf`. Check the size after any feature or dependency change.
+
+---
+
+## 3. Architecture
+
+```
+src/
+├─ main.rs        Entry point, message loop, wnd_proc, input/hotkey/wheel/numeric handlers
+├─ win.rs         COM init (STA) + DPI awareness (Per-Monitor V2)
+├─ window.rs      Window class registration + CreateWindowExW
+├─ menu.rs        Native menu bar and command IDs
+├─ render.rs      Direct2D/DirectWrite renderer and color palettes
+├─ state.rs       Monitor, MonitorIdentity, AppState; step/preset/sync math
+├─ monitors.rs    Monitor enumeration, device ID and EDID lookup (SetupDi + registry)
+├─ edid.rs        EDID parsing into a MonitorIdentity
+├─ brightness.rs  Hardware get/set: high-level API → raw VCP 0x10, failure counting
+├─ settings.rs    brightnessctl.json load/save, system theme detection
+├─ hotkeys.rs     RegisterHotKey / UnregisterHotKey wrapper
+└─ actions.rs     Action enum (hotkey IDs)
+```
+
+Planned new modules (fix plan):
+- `layout.rs`: shared layout math (#3),
+- `wmi.rs`: WMI backend for built-in panels (#4),
+- `worker.rs`: per-monitor I/O threads (#6).
+
+### Data flow
+
+1. **Startup:** set up COM and DPI → load settings → find monitors → read or restore brightness → create the window → register hotkeys → message loop. *(Fix plan #9 changes this to "show window first, detect monitors after".)*
+2. **Input** (mouse, wheel, keyboard, hotkeys, menu) **changes state** and asks for hardware writes **explicitly**.
+3. **Rendering only reads state.** It never changes anything.
+4. **Brightness is normalized to 0.0–1.0 internally.** A percentage (0–100) is used only for display and at the hardware boundary.
+
+### Rules
+
+- One slider per physical monitor.
+- Free physical monitor handles when a monitor is dropped (`DestroyPhysicalMonitors`).
+- Hit-testing and rendering must use the **same** layout code *(currently duplicated → fix plan #3)*.
+
+---
+
+## 4. Visual design
+
+This should look like **a Windows system utility**, not a styled app. If anything feels framework-like, it's wrong.
+
+### Window
+- Standard bordered, resizable Win32 window.
+- System title bar (never custom-drawn).
+- Native menu bar, which stays light even in dark mode.
+
+### Layout
+- Vertical stack with a fixed content column.
+- Spacing **8 / 16 / 24 px only**. Margins are 24.
+
+### Typography
+Segoe UI only:
+
+| Use | Size |
+|---|---|
+| Title | 20–22 px (uses 22) |
+| Body | 13–14 px (uses 14) |
+| Labels | 12 px, subdued color |
+
+### Color
+
+| Element | Dark | Light |
+|---|---|---|
+| Background | near-black `0.10` | `0.95` |
+| Foreground | off-white `0.95` | `0.10` |
+| Subdued | `0.60` | `0.40` |
+| Accent | `#0078D4` | `#0078D4` |
+
+- One muted accent color.
+- **No gradients, no shadows**, no non-native theming.
+
+### Controls
+- Custom-drawn sliders: a 4 px track, a filled part, and a round thumb.
+- Large hit targets.
+- Subtle hover and active feedback (lighter track, bigger thumb).
+- Percentage aligned right, above the track.
+
+### Themes
+`Auto` (follows the Windows `AppsUseLightTheme` setting), `Light`, `Dark`. Changes apply immediately.
+
+### Status bar
+A 24 px bar at the bottom with a separator line. It shows the last action, `SYNC ACTIVE` while sync mode is on, and `HOTKEY ERROR (n)` if any hotkeys failed to register.
+
+### Tooltip
+Shown when hovering over a row: name, hardware range, device path, and EDID manufacturer/code/serial.
+
+### Menu
+
+| Menu | Items |
+|---|---|
+| File | Exit |
+| View | Refresh Monitors; Sync All Monitors (Lock) |
+| Theme | Auto / Light / Dark |
+| Help | About |
+
+---
+
+## 5. Behavior specification
+
+### 5.1 Monitor identity
+
+- **Composite key:** `MFG:product_code:serial`.
+  - `MFG` is the 3-letter EDID manufacturer ID.
+  - `product_code` is a u16, little-endian.
+  - `serial` is the EDID serial-number **string** (descriptor tag `0xFF`) if present, otherwise the numeric serial.
+- **Fallback:** if there's no serial (or it is 0), use a hash of the full EDID and set `is_fallback = true`. The hash must give the same result across Rust versions *(→ fix plan #1: FNV-1a)*.
+- **No EDID:** the monitor is unidentified. Nothing is saved for it.
+- **Getting the EDID:** `EnumDisplayDevicesW(EDD_GET_DEVICE_INTERFACE_NAME)` → convert to the device instance ID → find the matching SetupDi device in the monitor class → registry value `EDID`. *(The current code uses flags `0`, which never matches → fix plan #1.)*
+
+### 5.2 Brightness control
+
+**Backend order:**
+1. high-level `Get/SetMonitorBrightness`,
+2. raw VCP `0x10` (`GetVCPFeatureAndVCPFeatureReply` / `SetVCPFeature`),
+3. WMI for built-in panels *(→ fix plan #4)*.
+
+The backend is chosen **once per monitor**, not tried again on every write.
+
+**Values:**
+- Normalize to 0–100 at the hardware boundary using the device's min/max, with rounding *(→ fix plan #15)*.
+- Treat the hardware min/max as advisory.
+
+**Reliability:**
+- Read back after the final write to confirm it (`write_confirmed`).
+- Disable a monitor after **10 consecutive failures**. Refresh Monitors re-enables it.
+- Don't flood the DDC/CI bus. Writes are coalesced (newest value wins) with a minimum gap of about 50 ms *(→ fix plan #6; currently a lossy 100 ms limiter)*.
+
+**Smart Restore:** on startup, restore the saved value **only if** `last_set_by_app && write_confirmed`. Otherwise use the monitor's current value. Never overwrite a value the user changed outside the app.
+
+### 5.3 Input
+
+**All input paths go through one write function** and are idempotent: if the value didn't change, nothing is written.
+
+**Mouse drag:**
+- Click the track to jump to that value; drag to adjust.
+- Hardware updates live during the drag, and the final value is always written.
+
+**Mouse wheel:**
+- Works while hovering over a slider; no focus needed.
+- Coarse step **0.05**, or fine step **0.01** while holding **Shift**. No other modifiers are read, to avoid clashing with hotkeys.
+- Clamped to 0–1, never wraps.
+
+**Typed value:**
+- Clicking the percentage label turns it into an edit field (up to 3 digits).
+- **Enter** or **losing focus** commits *(focus loss → fix plan #10)*; **Esc** cancels.
+- Commits produce exactly one write.
+- Values are clamped to 0–100. After commit or cancel the label shows a whole-number percentage again.
+
+**Global hotkeys:**
+- Defined in the config; the defaults are:
+
+  | Hotkey | Action |
+  |---|---|
+  | `Ctrl+Alt+Up` | Step Up |
+  | `Ctrl+Alt+Down` | Step Down |
+  | `Ctrl+Alt+P` | Cycle Presets |
+
+- `Action` values (`StepUp = 1`, `StepDown = 2`, `CyclePresets = 3`) are used as the `RegisterHotKey` IDs.
+- **Registration failures:** that hotkey is disabled, the failure shows in the status bar, and it isn't retried until restart or a config change.
+- Hotkeys are unregistered on exit *(→ fix plan #17)*.
+
+**Targeting** (hotkeys):
+- Sync mode on → all monitors.
+- Otherwise, the first of:
+  1. the hovered slider,
+  2. the slider being dragged,
+  3. the monitor under the mouse cursor,
+  4. the first monitor.
+
+**Step:** ± `step_size` in normalized space, clamped to 0–1, never wraps.
+
+**Cycle Presets:**
+- Moves to the first preset greater than the current value, wrapping to the first preset.
+- An empty preset list does nothing (no error).
+- Applying a preset sets an absolute value.
+
+### 5.4 Sync mode ("Lock")
+
+- Toggled from the View menu. Not saved; it's off after a restart.
+- Moving any slider applies the same **delta** to all monitors, in normalized space.
+- **Independent saturation:** a monitor that hits 0 or 1 stops while the others keep moving.
+- **No reverse compensation:** reversing direction moves on from the current values; lost offsets are not restored.
+
+### 5.5 Persistence
+
+- Saved per **identified** monitor in `monitor_states`:
+  - `brightness_value`,
+  - `normalized_value`,
+  - `last_set_by_app`,
+  - `write_confirmed`,
+  - `timestamp` (Unix seconds),
+  - `last_seen_device_path`.
+- Save the value **confirmed by the hardware**, debounced to about 1 s after the last change, and also save on close or Windows shutdown *(→ fix plan #7; currently saved on every mouse release)*.
+
+### 5.6 Refresh
+
+- **View → Refresh Monitors** finds the monitors again and resets per-monitor state.
+- It should also restore saved values and refresh automatically on `WM_DISPLAYCHANGE` *(→ fix plan #18)*.
+
+---
+
+## 6. Configuration: `brightnessctl.json`
+
+Stored **next to the EXE**. It's created with defaults on first run. *(Currently the working directory is used → fix plan #5.)*
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `theme` | `"Auto"` \| `"Light"` \| `"Dark"` | `"Auto"` | |
+| `monitor_states` | map `"MFG:code:serial"` → state | `{}` | See §5.5 |
+| `presets` | `f32[]` in 0–1 | `[0.0, 0.25, 0.5, 0.75, 1.0]` | Cycled in this order |
+| `hotkeys` | map `Action` → `{ vkey, modifiers }` | See §5.3 | `modifiers`: Alt = 1, Ctrl = 2, Shift = 4, Win = 8 |
+| `step_size` | `f32` in (0, 1] | `0.1` | Hotkey step size |
+
+**Missing fields** get their defaults.
+
+**Broken file** *(→ fix plan #5)*:
+- It is renamed to `brightnessctl.json.bak`.
+- Defaults are used.
+- The parse error is shown in the status bar.
+- The user's file is **never** overwritten.
+
+---
+
+## 7. Build, test, CI, release
+
+```powershell
+cargo build              # debug
+cargo test               # unit tests (some create real windows / enumerate monitors)
+cargo clippy --all-targets
+cargo build --release    # target\release\brightnessctl.exe, must stay < 1 MB
+```
+
+**CI** (`.github/workflows/ci.yml`) runs on `windows-latest` on pushes and PRs to `main`:
+- `cargo check --locked`,
+- `cargo test --locked`,
+- `cargo build --release --locked`.
+
+Fix plan #22 adds `cargo clippy --all-targets --locked -- -D warnings`.
+
+**Release** (`.github/workflows/release.yml`) runs on a `v*` tag or manual trigger. It builds and packages:
+- `brightnessctl-<tag>-windows-x86_64.zip` (EXE + default `brightnessctl.json` + README + LICENSE),
+- the standalone EXE,
+- SHA-256 checksums,
+
+then publishes a GitHub Release with generated notes.
+
+### Test hardware
+
+| Machine | Displays | Use for |
+|---|---|---|
+| Desktop | Gigabyte `GBT2402` + Acer `ACR0B96`, both external DDC/CI | DDC/CI and sync mode |
+| Laptop | Acer Aspire built-in panel | WMI, high-DPI scaling, hybrid-graphics device loss |
+
+Useful checks:
+
+```powershell
+Get-PnpDevice -Class Monitor -PresentOnly | Select InstanceId, FriendlyName
+Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness
+```
+
+- Win+Ctrl+Shift+B restarts the graphics driver, which is useful for testing device-loss handling.
+
+---
+
+## 8. Development workflow
+
+- Work on a branch, with **one commit per logical change**.
+- Use conventional commits: `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, e.g. `fix(monitors): match EDID by device instance ID`.
+- Write unit tests alongside changes for any logic that can be tested on its own. Move logic out of Win32 handlers into pure functions so it can be tested.
+- Mark tests that need real monitors with `#[ignore]`.
+- Before committing, `cargo build`, `cargo test` and `cargo clippy` must all pass with no warnings.
+- Check the release size after feature or dependency changes.
+- Keep `docs/fix-plan.md` checkboxes up to date, and update this file when rules or architecture change.
+
+### Code style
+
+- **Readability:** clear over clever.
+- **Consistency:** follow existing patterns and naming.
+- **Simplicity:** prefer the simple solution; split complex problems into smaller parts.
+- **Maintainability:** keep coupling low and dependencies few.
+- **Comments:** comment sparingly, and explain *why* rather than *what*. Keep docs in sync with code.
+
+---
+
+## 9. History (summary of retired `conductor/` tracks)
+
+| Track | Date | Delivered | Not delivered / known gaps |
+|---|---|---|---|
+| core_refinement | 2025-12-21 | Win32 window and DPI init, monitor enumeration, Direct2D/DirectWrite setup, basic hit-testing | Rendering doesn't handle DPI correctly (→ #3) |
+| fix_warnings | 2025-12-21 | Removed unused fields (`hmonitor`, `hot_monitor`) | `hmonitor` was later re-added for cursor-based hotkey targeting |
+| ui_polish | 2025-12-21 | Settings JSON, native menu, Light/Dark/Auto themes, responsive layout, status bar, hover/active slider states | Window position not saved (optional); status messages don't auto-clear; no color transitions |
+| monitor_identity | 2025-12-22 | EDID identity and composite key, persistence model, rate limit and backoff, Smart Restore, sync mode, tooltips, status labels | EDID lookup never matched, so saving and restoring never worked (→ #1); connection-type label (HDMI/DP/USB-C) not built; observed min/max recorded but unused; manual checks for phases 1–3 never done |
+| enhanced_input | 2025-12-22 | Global hotkeys, mouse wheel, typed values, preset cycling, hotkey failure indicator | Focus loss doesn't commit a typed value (→ #10); wheel and hotkey writes can be dropped (→ #6); promised tests for wheel and typed values missing (→ #10, #23) |
+
+## 10. Roadmap (after the fix plan)
+
+- System tray icon for quick access.
+- Master slider: all monitors in unison. Sync mode partly covers this.
+- Best-effort connection-type label (HDMI/DP/USB-C), never blocking control.
+- Remember window position and size.
+- Auto-clear status messages (one-shot timer).
+
+**Out of scope:** complex animations, custom-drawn title bar, dark menu bar.

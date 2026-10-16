@@ -1,6 +1,6 @@
 # Fix Plan: Audit Findings
 
-This plan addresses every issue found in a full review of the codebase (written against commit `7e277cf`). It is self-contained: `GEMINI.md` and `conductor/` are gitignored and may not exist on your machine, so the constraints and decisions that matter are repeated here.
+This plan addresses every issue found in a full review of the codebase (written against commit `7e277cf`). The full project rules, architecture and behavior spec are in [`docs/AGENTS.md`](AGENTS.md); read that first. The constraints and decisions that matter most here are repeated below.
 
 ## How to use this file
 
@@ -12,7 +12,7 @@ This plan addresses every issue found in a full review of the codebase (written 
 
 ## Project constraints
 
-Still in force (from `GEMINI.md`):
+From `docs/AGENTS.md`:
 
 - Rust stable, MSVC toolchain, Windows 10/11 only.
 - UI is raw Win32 + Direct2D + DirectWrite. **No** egui, wgpu, winit, WinUI/XAML, Qt, GTK, Electron/WebView, or async runtimes.
@@ -21,7 +21,7 @@ Still in force (from `GEMINI.md`):
 - **Zero idle CPU**: no polling. Redraw only in response to `WM_PAINT`, input, or a real state change.
 - Failing silently is fine. Never crash because of a misbehaving monitor. Log only in debug builds.
 
-Decisions made during planning (these **override** the corresponding rules in `GEMINI.md`):
+Decisions made during planning (already reflected in `docs/AGENTS.md`; they replace the old "no threads / no timers / Dxva2 only" rules):
 
 | Topic | Decision |
 |---|---|
@@ -370,10 +370,10 @@ Tasks:
   - The config file lives next to the exe, and a broken config is backed up to `.bak`.
   - Built-in laptop panels are supported through WMI (`README.md:32`).
   - Startup is now instant (monitors are detected after the window opens).
-- [ ] **25. Local docs.** These files are gitignored, so do this only on a machine where they exist:
-  - Update `GEMINI.md` and `conductor/tech-stack.md`:
-    - built-in panels are controlled through WMI,
-    - per-monitor worker threads are allowed,
-    - one-shot timers are allowed,
-    - fix the wrong claim that "Dxva2 controls internal displays".
-  - Correct the acceptance-criteria checkboxes in `conductor/tracks/enhanced_input_20251222/spec.md`.
+- [ ] **25. `docs/AGENTS.md`.** Bring it in line with the finished code:
+  - add `layout.rs`, `wmi.rs` and `worker.rs` to the module map and data flow,
+  - remove every *(→ fix plan #N)* note whose item is done,
+  - update the startup sequence (window first, then monitor detection),
+  - record the final minimum write gap from item 6,
+  - update the release binary size,
+  - move anything learned while fixing (e.g. the confirmed WMI instance-name format) into the relevant section.
