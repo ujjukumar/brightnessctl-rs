@@ -136,16 +136,22 @@ Strip the leading `\\?\`, drop the trailing `#{guid}`, and replace `#` with `\`.
 
 At 125% or 150% scaling the slider runs past the right edge and clicks land on the wrong values. `WM_DPICHANGED` isn't handled. The layout numbers are also written twice (`render.rs` and `handle_input`, with a "MUST match" comment).
 
-- [ ] Add `src/layout.rs`: a pure function along the lines of `compute(width_dip: f32, monitor_count: usize) -> Layout`. It returns the title rect, and for each row the label, percentage, track and hit rects, plus the status bar rect. Unit tests:
+- [x] Add `src/layout.rs`: a pure function along the lines of `compute(width_dip: f32, monitor_count: usize) -> Layout`. It returns the title rect, and for each row the label, percentage, track and hit rects, plus the status bar rect. Unit tests:
   - rows don't overlap,
   - each hit rect contains its track,
   - the percentage rect is flush right,
   - width is clamped to at least 1.
-- [ ] Use `layout::compute` in both `render.rs` and `handle_input`, and delete the duplicated constants in `main.rs`.
-- [ ] Create the drawing surface with `dpiX`/`dpiY` = `GetDpiForWindow(hwnd)`. Do all layout in DIPs: `width_dip = px * 96 / dpi`.
-- [ ] Convert mouse coordinates from pixels to DIPs before hit-testing.
-- [ ] Handle `WM_DPICHANGED`: `SetWindowPos` to the suggested rect (in `lParam`), `SetDpi` on the drawing surface, redraw.
-- [ ] Make the starting window size 400×600 **DIPs**, scaled for the window's monitor (use `AdjustWindowRectExForDpi`, which takes the menu bar into account).
+- [x] Use `layout::compute` in both `render.rs` and `handle_input`, and delete the duplicated constants in `main.rs`.
+- [x] Create the drawing surface with `dpiX`/`dpiY` = `GetDpiForWindow(hwnd)`. Do all layout in DIPs: `width_dip = px * 96 / dpi`.
+- [x] Convert mouse coordinates from pixels to DIPs before hit-testing.
+- [x] Handle `WM_DPICHANGED`: `SetWindowPos` to the suggested rect (in `lParam`), `SetDpi` on the drawing surface, redraw.
+- [x] Make the starting window size 400×600 **DIPs**, scaled for the window's monitor (use `AdjustWindowRectExForDpi`, which takes the menu bar into account).
+
+*Result:*
+- `layout::compute(width, height, rows)` also returns the tooltip rect, and provides `hit_test`, `value_at`, `thumb_x` and `px_to_dip`.
+- The renderer reads the DIP size from the render target (`GetSize`) and calls `SetDpi` whenever `GetDpiForWindow` changes, which covers both `WM_DPICHANGED` and the first paint.
+- The default size is now a 384×544 DIP **client area** (what 400×600 outer pixels gave at 100%). The window is created hidden, sized for its DPI, then shown.
+- Checked by screenshot at 100% on the desktop (client 384×544, layout unchanged). Scaled displays still need a manual check.
 
 **Done when:**
 - at 100%, 125%, 150% and 175% the slider fits the window and clicking the thumb doesn't make it jump,

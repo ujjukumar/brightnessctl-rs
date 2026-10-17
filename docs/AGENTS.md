@@ -73,6 +73,7 @@ src/
 ├─ win.rs         COM init (STA) + DPI awareness (Per-Monitor V2)
 ├─ window.rs      Window class registration + CreateWindowExW
 ├─ menu.rs        Native menu bar and command IDs
+├─ layout.rs      Window layout in DIPs, shared by rendering and hit-testing
 ├─ render.rs      Direct2D/DirectWrite renderer and color palettes
 ├─ state.rs       Monitor, MonitorIdentity, AppState; step/preset/sync math
 ├─ monitors.rs    Monitor enumeration, device ID and EDID lookup (SetupDi + registry)
@@ -84,7 +85,6 @@ src/
 ```
 
 Planned new modules (fix plan):
-- `layout.rs`: shared layout math (#3),
 - `wmi.rs`: WMI backend for built-in panels (#4),
 - `worker.rs`: per-monitor I/O threads (#6).
 
@@ -99,7 +99,8 @@ Planned new modules (fix plan):
 
 - One slider per physical monitor.
 - Free physical monitor handles when a monitor is dropped (`DestroyPhysicalMonitors`).
-- Hit-testing and rendering must use the **same** layout code *(currently duplicated → fix plan #3)*.
+- Hit-testing and rendering must use the **same** layout code: `layout::compute`.
+- **DPI:** all layout is in DIPs (96 per inch). The render target is created at `GetDpiForWindow` and follows DPI changes with `SetDpi`. Mouse coordinates are converted with `layout::px_to_dip` before hit-testing. `WM_DPICHANGED` applies the window rect Windows suggests. The default client area is 384×544 DIPs.
 
 ---
 

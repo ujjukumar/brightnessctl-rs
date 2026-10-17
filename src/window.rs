@@ -2,8 +2,17 @@ use windows::{
     core::*,
     Win32::Foundation::*,
     Win32::Graphics::Gdi::*,
+    Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
     Win32::UI::WindowsAndMessaging::*,
 };
+
+/// Default client area size in DIPs; scaled to the window's DPI at creation.
+const CLIENT_WIDTH: i32 = 384;
+const CLIENT_HEIGHT: i32 = 544;
+
+fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
+    (value * dpi as i32 + 48) / 96
+}
 
 pub unsafe fn create(
     instance: HINSTANCE, 
@@ -36,15 +45,18 @@ pub unsafe fn create(
         }
     }
 
+    // Created hidden at a default size: the DPI, and so the right size, is only
+    // known once the window exists on a monitor.
+    let style = WS_OVERLAPPEDWINDOW;
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         class_name,
         &HSTRING::from(title),
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        style,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        400,
-        600,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
         None,
         menu,
         Some(instance),
@@ -54,6 +66,25 @@ pub unsafe fn create(
     if hwnd.0.is_null() {
         return Err(Error::from_thread());
     }
+
+    let dpi = GetDpiForWindow(hwnd);
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: scale_for_dpi(CLIENT_WIDTH, dpi),
+        bottom: scale_for_dpi(CLIENT_HEIGHT, dpi),
+    };
+    let _ = AdjustWindowRectExForDpi(&mut rect, style, menu.is_some(), WINDOW_EX_STYLE::default(), dpi);
+    let _ = SetWindowPos(
+        hwnd,
+        None,
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let _ = ShowWindow(hwnd, SW_SHOW);
 
     Ok(hwnd)
 }
@@ -65,6 +96,14 @@ mod tests {
 
     extern "system" fn test_wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
+
+    #[test]
+    fn test_scale_for_dpi() {
+        assert_eq!(scale_for_dpi(384, 96), 384);
+        assert_eq!(scale_for_dpi(384, 120), 480);
+        assert_eq!(scale_for_dpi(384, 144), 576);
+        assert_eq!(scale_for_dpi(544, 168), 952);
     }
 
     #[test]

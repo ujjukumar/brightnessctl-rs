@@ -10,6 +10,7 @@ mod brightness;
 mod edid;
 mod state;
 mod render;
+mod layout;
 mod settings;
 mod menu;
 mod actions;
@@ -23,11 +24,13 @@ use windows::{
     Win32::UI::WindowsAndMessaging::*,
     Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect},
     Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE},
+    Win32::UI::HiDpi::GetDpiForWindow,
     Win32::System::LibraryLoader::GetModuleHandleW,
 };
 
 use crate::settings::Settings;
 use crate::actions::Action;
+use crate::layout::Hit;
 
 static mut APP_STATE: Option<AppState> = None;
 static mut RENDERER: Option<render::Renderer> = None;
@@ -241,6 +244,21 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                  let _ = InvalidateRect(Some(window), None, false);
                  LRESULT(0)
             }
+            WM_DPICHANGED => {
+                // lParam points to the size and position Windows suggests for the new DPI.
+                let suggested = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    window,
+                    None,
+                    suggested.left,
+                    suggested.top,
+                    suggested.right - suggested.left,
+                    suggested.bottom - suggested.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                let _ = InvalidateRect(Some(window), None, false);
+                LRESULT(0)
+            }
             WM_LBUTTONDOWN => {
                 let x = (lparam.0 as i16) as i32;
                 let y = ((lparam.0 >> 16) as i16) as i32;
@@ -443,69 +461,50 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
 
 unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
     if let Some(state) = APP_STATE.as_mut() {
-        // Layout calculations MUST match render.rs
-        let margin_x = 24.0;
-        let mut cur_y = 24.0 + 48.0; // Header spacing
-        let monitor_spacing = 48.0;
-        
-        // Get window width for layout
-        let mut rect = windows::Win32::Foundation::RECT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(window, &mut rect);
-        let width = (rect.right - rect.left) as f32;
-        
-        let slider_width = (width - 2.0 * margin_x).max(1.0);
+        // Mouse coordinates are physical pixels; the layout is in DIPs.
+        let dpi = GetDpiForWindow(window);
+        let mut rect = RECT::default();
+        let _ = GetClientRect(window, &mut rect);
+        let layout = layout::compute(
+            layout::px_to_dip(rect.right - rect.left, dpi),
+            layout::px_to_dip(rect.bottom - rect.top, dpi),
+            state.monitors.len(),
+        );
+        let x = layout::px_to_dip(x, dpi);
+        let y = layout::px_to_dip(y, dpi);
 
-        let mut hit_idx = None;
-        let mut label_hit_idx = None;
-        for (i, _) in state.monitors.iter().enumerate() {
-            let label_top = cur_y;
-            let label_bottom = cur_y + 16.0;
-            let label_left = width - margin_x - 60.0;
-            let label_right = width - margin_x;
+        let hit = layout.hit_test(x, y);
+        let hover_idx = match hit {
+            Some(Hit::Track(idx)) => Some(idx),
+            _ => None,
+        };
 
-            if (x as f32) >= label_left && (x as f32) <= label_right && (y as f32) >= label_top && (y as f32) <= label_bottom {
-                label_hit_idx = Some(i);
-            }
-
-            let slider_top = cur_y + 24.0 + 8.0;
-            let slider_bottom = slider_top + 4.0;
-            
-            let hit_top = slider_top - 12.0;
-            let hit_bottom = slider_bottom + 12.0;
-            
-            if (y as f32) >= hit_top && (y as f32) <= hit_bottom {
-                hit_idx = Some(i);
-                break;
-            }
-            
-            cur_y += 24.0 + monitor_spacing;
-        }
-
-        if state.hover_monitor_idx != hit_idx {
-            state.hover_monitor_idx = hit_idx;
+        if state.hover_monitor_idx != hover_idx {
+            state.hover_monitor_idx = hover_idx;
             let _ = InvalidateRect(Some(window), None, false);
         }
 
         // If clicking down, find which slider or label
         if is_down {
-            if let Some(idx) = label_hit_idx {
-                state.editing_monitor = Some(idx);
-                state.edit_buffer = format!("{}", (state.brightness[idx] * 100.0).round() as u32);
-                let _ = InvalidateRect(Some(window), None, false);
-            } else if let Some(idx) = hit_idx {
-                state.editing_monitor = None; // Stop editing if clicking elsewhere
-                DRAGGING_MONITOR_IDX = Some(idx);
-                state.active_monitor_idx = Some(idx);
-                let _ = InvalidateRect(Some(window), None, false);
-            } else {
-                state.editing_monitor = None;
-                let _ = InvalidateRect(Some(window), None, false);
+            match hit {
+                Some(Hit::Value(idx)) => {
+                    state.editing_monitor = Some(idx);
+                    state.edit_buffer = format!("{}", (state.brightness[idx] * 100.0).round() as u32);
+                }
+                Some(Hit::Track(idx)) => {
+                    state.editing_monitor = None; // Stop editing if clicking elsewhere
+                    DRAGGING_MONITOR_IDX = Some(idx);
+                    state.active_monitor_idx = Some(idx);
+                }
+                None => state.editing_monitor = None,
             }
+            let _ = InvalidateRect(Some(window), None, false);
         }
 
         // Processing movement/drag
         if let Some(idx) = DRAGGING_MONITOR_IDX {
-            let new_pct = ((x as f32 - margin_x) / slider_width).clamp(0.0, 1.0);
+            let Some(row) = layout.rows.get(idx) else { return };
+            let new_pct = layout::value_at(&row.track, x);
             let old_pct = state.brightness[idx];
             let delta = new_pct - old_pct;
 
