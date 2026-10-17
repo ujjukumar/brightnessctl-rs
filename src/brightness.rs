@@ -1,4 +1,4 @@
-use crate::state::{Backend, Monitor};
+use crate::state::Backend;
 use crate::wmi;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Devices::Display::{
@@ -79,18 +79,19 @@ impl VcpBackend {
         (percent * self.max) / 100
     }
 
-    fn read_raw(&mut self) -> Option<u32> {
+    /// Current raw value and the monitor's maximum.
+    fn read_raw(&mut self) -> Option<(u32, u32)> {
         let (mut current, mut max) = (0, 0);
         let ok = unsafe {
             GetVCPFeatureAndVCPFeatureReply(self.handle.raw(), VCP_CODE_BRIGHTNESS, None, &mut current, Some(&mut max)) != 0
         };
-        ok.then_some(current)
+        ok.then_some((current, max))
     }
 }
 
 impl BrightnessBackend for VcpBackend {
     fn read(&mut self) -> Option<u32> {
-        self.read_raw().map(|raw| (raw * 100) / self.max)
+        self.read_raw().map(|(raw, _)| (raw * 100) / self.max)
     }
 
     fn write(&mut self, percent: u32) -> bool {
@@ -100,7 +101,7 @@ impl BrightnessBackend for VcpBackend {
 
     fn verify(&mut self, percent: u32) -> bool {
         let expected = self.to_raw(percent);
-        self.read_raw() == Some(expected)
+        self.read_raw().map(|(raw, _)| raw) == Some(expected)
     }
 }
 
@@ -124,105 +125,67 @@ impl BrightnessBackend for WmiBackend {
     }
 }
 
-/// Stands in when a backend can't be opened, so every write is reported as failed.
-struct UnavailableBackend;
-
-impl BrightnessBackend for UnavailableBackend {
-    fn read(&mut self) -> Option<u32> {
-        None
-    }
-
-    fn write(&mut self, _percent: u32) -> bool {
-        false
-    }
+/// What probing found out about a monitor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    pub backend: Backend,
+    pub hardware_min: u32,
+    pub hardware_max: u32,
+    /// Current brightness in percent; `None` if no backend could read it.
+    pub value: Option<u32>,
 }
 
-/// What a worker needs to open a monitor's backend on its own thread.
-#[derive(Debug)]
-pub enum BackendSpec {
-    HighLevel(PhysicalHandle),
-    Vcp { handle: PhysicalHandle, max: u32 },
-    /// COM objects can't move between threads, so the worker connects to WMI itself.
-    Wmi { device_path: String },
-}
-
-/// Takes what a worker needs out of `m`. `None` for monitors without a usable backend.
-pub fn worker_spec(m: &mut Monitor) -> Option<BackendSpec> {
-    match m.backend {
-        Backend::HighLevel => m.physical.take().map(BackendSpec::HighLevel),
-        Backend::Vcp { max } => m.physical.take().map(|handle| BackendSpec::Vcp { handle, max }),
-        Backend::Wmi => Some(BackendSpec::Wmi { device_path: m.device_path.clone() }),
-        Backend::Unsupported => None,
+impl Probe {
+    fn unsupported() -> Self {
+        Self { backend: Backend::Unsupported, hardware_min: 0, hardware_max: 100, value: None }
     }
 }
 
-/// Opens the backend described by `spec` on the current thread and runs `f` with it.
-pub fn with_backend(spec: BackendSpec, f: impl FnOnce(&mut dyn BrightnessBackend)) {
-    match spec {
-        BackendSpec::HighLevel(handle) => f(&mut HighLevelBackend { handle }),
-        BackendSpec::Vcp { handle, max } => f(&mut VcpBackend { handle, max }),
-        BackendSpec::Wmi { device_path } => {
-            let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
-            // Scoped so every COM object is released before COM is uninitialized.
-            {
-                let panel = wmi::Connection::connect().ok().and_then(|c| c.find_panel(&device_path));
-                match panel {
-                    Some(panel) => f(&mut WmiBackend { panel }),
-                    None => f(&mut UnavailableBackend),
-                }
-            }
-            if initialized {
-                unsafe { CoUninitialize() };
-            }
-        }
-    }
-}
-
-/// Chooses each monitor's backend and returns its current brightness (0-100).
+/// Finds a working backend for a monitor on the current thread and runs `f` with it.
 ///
-/// Tries Dxva2's high-level API, then raw VCP 0x10, then WMI. WMI is only
-/// connected when a monitor needs it, so desktops never pay for it.
-pub fn probe_all(monitors: &mut [Monitor]) -> Vec<Option<u32>> {
-    let mut wmi_connection: Option<Option<wmi::Connection>> = None;
-    monitors
-        .iter_mut()
-        .map(|m| {
-            if let Some(value) = probe_dxva2(m) {
-                return Some(value);
-            }
-            let connection = wmi_connection
-                .get_or_insert_with(|| wmi::Connection::connect().ok())
-                .as_ref()?;
-            let value = connection.find_panel(&m.device_path)?.get_brightness()?;
-            m.hardware_min = 0;
-            m.hardware_max = 100;
-            m.backend = Backend::Wmi;
-            Some(value)
-        })
-        .collect()
-}
-
-fn probe_dxva2(m: &mut Monitor) -> Option<u32> {
-    let handle = m.physical.as_ref()?.raw();
-    unsafe {
+/// Tries Dxva2's high-level API, then raw VCP 0x10, then WMI; `f` gets `None` if nothing
+/// can read the monitor. COM and WMI are only set up when Dxva2 fails, so desktops never
+/// pay for them.
+pub fn with_probed_backend(
+    physical: Option<PhysicalHandle>,
+    device_path: &str,
+    f: impl FnOnce(Probe, Option<&mut dyn BrightnessBackend>),
+) {
+    if let Some(handle) = physical {
         let (mut min, mut current, mut max) = (0, 0, 0);
-        if GetMonitorBrightness(handle, &mut min, &mut current, &mut max) != 0 {
-            m.hardware_min = min;
-            m.hardware_max = max;
-            m.backend = Backend::HighLevel;
-            return Some(current);
+        if unsafe { GetMonitorBrightness(handle.raw(), &mut min, &mut current, &mut max) } != 0 {
+            let probe = Probe { backend: Backend::HighLevel, hardware_min: min, hardware_max: max, value: Some(current) };
+            return f(probe, Some(&mut HighLevelBackend { handle }));
         }
 
-        let (mut current, mut max) = (0, 0);
-        if GetVCPFeatureAndVCPFeatureReply(handle, VCP_CODE_BRIGHTNESS, None, &mut current, Some(&mut max)) != 0 {
-            let max = if max > 0 { max } else { 100 };
-            m.hardware_min = 0;
-            m.hardware_max = max;
-            m.backend = Backend::Vcp { max };
-            return Some((current * 100) / max);
+        let mut vcp = VcpBackend { handle, max: 100 };
+        if let Some((current, max)) = vcp.read_raw() {
+            vcp.max = if max > 0 { max } else { 100 };
+            let probe = Probe {
+                backend: Backend::Vcp { max: vcp.max },
+                hardware_min: 0,
+                hardware_max: vcp.max,
+                value: Some((current * 100) / vcp.max),
+            };
+            return f(probe, Some(&mut vcp));
         }
     }
-    None
+
+    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+    // Scoped so every COM object is released before COM is uninitialized.
+    {
+        let panel = wmi::Connection::connect().ok().and_then(|c| c.find_panel(device_path));
+        match panel.and_then(|panel| panel.get_brightness().map(|value| (panel, value))) {
+            Some((panel, value)) => {
+                let probe = Probe { backend: Backend::Wmi, hardware_min: 0, hardware_max: 100, value: Some(value) };
+                f(probe, Some(&mut WmiBackend { panel }));
+            }
+            None => f(Probe::unsupported(), None),
+        }
+    }
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
 }
 
 pub fn should_restore(saved: &crate::settings::MonitorState) -> bool {
@@ -236,17 +199,25 @@ mod tests {
 
     #[test]
     #[ignore = "requires connected monitors; reads brightness only"]
-    fn test_probe_all_reads_every_monitor() {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    fn test_probe_reads_every_monitor() {
+        for mut m in crate::monitors::enumerate_monitors() {
+            let started = std::time::Instant::now();
+            with_probed_backend(m.physical.take(), &m.device_path, |probe, backend| {
+                println!("{} -> {:?} in {:?}", m.device_path, probe, started.elapsed());
+                assert!(probe.value.is_some(), "could not read {}", m.device_path);
+                assert!(backend.is_some());
+                assert_ne!(probe.backend, Backend::Unsupported);
+            });
         }
-        let mut monitors = crate::monitors::enumerate_monitors();
-        let values = probe_all(&mut monitors);
-        for (m, value) in monitors.iter().zip(&values) {
-            println!("{} -> {:?} = {:?}", m.device_path, m.backend, value);
-            assert!(value.is_some(), "could not read {}", m.device_path);
-            assert!(!matches!(m.backend, Backend::Unsupported));
-        }
+    }
+
+    #[test]
+    fn test_probe_without_handle_or_wmi_is_unsupported() {
+        // No Dxva2 handle and no WMI panel at this path.
+        with_probed_backend(None, r"DISPLAY\NOPE0000\0&0&0&UID0", |probe, backend| {
+            assert_eq!(probe, Probe::unsupported());
+            assert!(backend.is_none());
+        });
     }
 
     #[test]
@@ -267,20 +238,5 @@ mod tests {
         state.write_confirmed = true;
         state.last_set_by_app = false;
         assert!(!should_restore(&state));
-    }
-
-    #[test]
-    fn test_worker_spec_takes_the_handle() {
-        let mut m = Monitor::new(None, 0, "Test".into(), None, r"DISPLAY\TEST\1".into());
-        assert!(worker_spec(&mut m).is_none(), "unsupported monitors get no worker");
-
-        m.backend = Backend::HighLevel;
-        assert!(worker_spec(&mut m).is_none(), "no handle, no Dxva2 worker");
-
-        m.backend = Backend::Wmi;
-        match worker_spec(&mut m) {
-            Some(BackendSpec::Wmi { device_path }) => assert_eq!(device_path, r"DISPLAY\TEST\1"),
-            other => panic!("unexpected spec {other:?}"),
-        }
     }
 }

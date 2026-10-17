@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 use windows::Win32::Foundation::HWND;
 use crate::brightness::{self, PhysicalHandle};
 use crate::settings::{Settings, MonitorState};
-use crate::worker::{WriteResult, Worker};
+use crate::worker::{MonitorReady, WorkerJob, WriteResult, Worker};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Consecutive failed writes after which a monitor is disabled until the next refresh.
@@ -22,7 +22,8 @@ impl MonitorIdentity {
     }
 }
 
-/// How a monitor's brightness is controlled. Chosen once by `brightness::probe_all`.
+/// How a monitor's brightness is controlled. Chosen once by the monitor's worker
+/// (`brightness::with_probed_backend`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Backend {
     /// Not probed yet, or no API could read the monitor.
@@ -57,6 +58,8 @@ pub struct Monitor {
     pub timestamp: u64,
     pub failure_count: u32,
     pub is_disabled: bool,
+    /// False until the worker has probed the monitor; until then input is ignored.
+    pub ready: bool,
     pub worker: Option<Worker>,
 }
 
@@ -85,8 +88,14 @@ impl Monitor {
             timestamp: 0,
             failure_count: 0,
             is_disabled: false,
+            ready: false,
             worker: None,
         }
+    }
+
+    /// True if input should change this monitor.
+    pub fn accepts_input(&self) -> bool {
+        self.ready && self.backend != Backend::Unsupported && !self.is_disabled
     }
 
     /// The slider value as a whole percentage.
@@ -97,7 +106,7 @@ impl Monitor {
     /// Sends the slider value to the worker, unless it is the value last sent.
     pub fn request_write(&mut self) {
         let percent = self.percent();
-        if self.is_disabled || self.last_requested == Some(percent) {
+        if !self.accepts_input() || self.last_requested == Some(percent) {
             return;
         }
         if let Some(worker) = &self.worker {
@@ -195,13 +204,58 @@ impl AppState {
         self.settings_dirty = false;
     }
 
-    /// Starts a worker for every monitor with a usable backend, reporting to `hwnd`.
+    /// Starts a worker for every monitor, reporting to `hwnd`. Each worker probes its
+    /// monitor, applies Smart Restore and reports `WM_APP_MONITOR_READY`.
     pub fn start_workers(&mut self, hwnd: HWND) {
         self.worker_generation = self.worker_generation.wrapping_add(1);
         let generation = self.worker_generation;
         for (index, m) in self.monitors.iter_mut().enumerate() {
-            m.worker = brightness::worker_spec(m).and_then(|spec| Worker::spawn(spec, hwnd, generation, index));
+            // Smart Restore: only reapply values this app set and confirmed.
+            let restore = m
+                .identity
+                .as_ref()
+                .and_then(|ident| self.settings.get_monitor_state(ident))
+                .filter(|saved| brightness::should_restore(saved))
+                .map(|saved| saved.brightness_value);
+            let job = WorkerJob { physical: m.physical.take(), device_path: m.device_path.clone(), restore };
+            m.worker = Worker::spawn(job, hwnd, generation, index);
+            if m.worker.is_none() {
+                // No thread, so no report will come: show the monitor as uncontrollable.
+                m.ready = true;
+            }
         }
+    }
+
+    /// Applies the worker's probe (and Smart Restore) result for monitor `idx`. Results
+    /// from an older worker generation are ignored. Returns true if the monitor changed.
+    pub fn handle_monitor_ready(&mut self, generation: u16, idx: usize, ready: MonitorReady) -> bool {
+        if generation != self.worker_generation {
+            return false;
+        }
+        let Some(m) = self.monitors.get_mut(idx) else {
+            return false;
+        };
+        let probe = ready.probe;
+        m.backend = probe.backend;
+        m.hardware_min = probe.hardware_min;
+        m.hardware_max = probe.hardware_max;
+
+        let mut value = probe.value;
+        if let Some(result) = ready.restore {
+            m.apply_write_result(result);
+            if result.success {
+                value = Some(result.value);
+                if m.identity.is_some() {
+                    self.settings_dirty = true;
+                }
+            }
+        }
+        if let Some(value) = value {
+            m.ui_value = value as f32 / 100.0;
+        }
+        m.last_requested = value;
+        m.ready = true;
+        true
     }
 
     /// Sends the slider value of each target monitor to its worker. Every input path
@@ -216,7 +270,7 @@ impl AppState {
 
     /// Moves every monitor by `delta`; each stops independently at 0.0 or 1.0.
     pub fn apply_sync_delta(&mut self, _dragged_idx: usize, delta: f32) {
-        for m in &mut self.monitors {
+        for m in self.monitors.iter_mut().filter(|m| m.accepts_input()) {
             m.ui_value = (m.ui_value + delta).clamp(0.0, 1.0);
         }
     }
@@ -245,7 +299,7 @@ impl AppState {
 
     pub fn apply_step(&mut self, indices: &[usize], delta: f32) {
         for &idx in indices {
-            if let Some(m) = self.monitors.get_mut(idx) {
+            if let Some(m) = self.monitors.get_mut(idx).filter(|m| m.accepts_input()) {
                 m.ui_value = (m.ui_value + delta).clamp(0.0, 1.0);
             }
         }
@@ -254,7 +308,7 @@ impl AppState {
     pub fn set_absolute(&mut self, indices: &[usize], value: f32) {
         let value = value.clamp(0.0, 1.0);
         for &idx in indices {
-            if let Some(m) = self.monitors.get_mut(idx) {
+            if let Some(m) = self.monitors.get_mut(idx).filter(|m| m.accepts_input()) {
                 m.ui_value = value;
             }
         }
@@ -265,7 +319,7 @@ impl AppState {
         if presets.is_empty() { return; }
 
         for &idx in indices {
-            if let Some(m) = self.monitors.get_mut(idx) {
+            if let Some(m) = self.monitors.get_mut(idx).filter(|m| m.accepts_input()) {
                 // Next preset strictly greater than the current value, wrapping to the first.
                 m.ui_value = presets
                     .iter()
@@ -285,6 +339,8 @@ mod tests {
 
     fn monitor(value: f32) -> Monitor {
         let mut m = Monitor::new(None, 0, "Test".into(), None, String::new());
+        m.backend = Backend::HighLevel;
+        m.ready = true;
         m.ui_value = value;
         m
     }
@@ -511,5 +567,81 @@ mod tests {
         assert!(!state.settings_dirty);
         state.persist_monitor_states();
         assert!(state.settings.monitor_states.is_empty(), "a monitor the app never wrote isn't saved");
+    }
+
+    fn probe(backend: Backend, value: Option<u32>) -> crate::brightness::Probe {
+        crate::brightness::Probe { backend, hardware_min: 0, hardware_max: 100, value }
+    }
+
+    #[test]
+    fn test_monitor_ignores_input_until_ready() {
+        let mut state = state_with(&[0.5]);
+        state.monitors[0].ready = false;
+        let mailbox = Arc::new(Mailbox::default());
+        state.monitors[0].worker = Some(Worker::detached(Arc::clone(&mailbox)));
+
+        state.apply_step(&[0], 0.2);
+        state.set_absolute(&[0], 0.9);
+        state.settings.presets = vec![1.0];
+        state.cycle_presets(&[0]);
+        state.apply_sync_delta(0, 0.3);
+        state.request_brightness(&[0]);
+        assert_eq!(values(&state), vec![0.5]);
+        assert_eq!(mailbox.take_pending(), None);
+    }
+
+    #[test]
+    fn test_monitor_ready_applies_probe() {
+        let mut state = state_with(&[0.5]);
+        state.monitors[0].ready = false;
+        state.monitors[0].backend = Backend::Unsupported;
+        state.worker_generation = 2;
+
+        let ready = MonitorReady { probe: probe(Backend::Vcp { max: 255 }, Some(30)), restore: None };
+        assert!(!state.handle_monitor_ready(1, 0, ready.clone()), "stale generation ignored");
+        assert!(!state.monitors[0].ready);
+
+        assert!(state.handle_monitor_ready(2, 0, ready));
+        let m = &state.monitors[0];
+        assert!(m.ready && m.accepts_input());
+        assert_eq!(m.backend, Backend::Vcp { max: 255 });
+        assert_eq!(m.percent(), 30);
+        assert_eq!(m.last_requested, Some(30), "the hardware already has this value");
+        assert!(!state.settings_dirty);
+    }
+
+    #[test]
+    fn test_monitor_ready_with_restore() {
+        let mut state = AppState {
+            monitors: vec![identified(0.5)],
+            ..Default::default()
+        };
+        state.monitors[0].ready = false;
+        let restored = WriteResult { value: 70, success: true, confirmed: Some(true) };
+
+        state.handle_monitor_ready(0, 0, MonitorReady { probe: probe(Backend::HighLevel, Some(20)), restore: Some(restored) });
+        let m = &state.monitors[0];
+        assert_eq!(m.percent(), 70);
+        assert_eq!(m.written_value, Some(70));
+        assert!(m.write_confirmed);
+        assert!(state.settings_dirty);
+
+        // A failed restore leaves the probed value.
+        let mut state = state_with(&[0.5]);
+        state.monitors[0].ready = false;
+        let failed = WriteResult { value: 70, success: false, confirmed: None };
+        state.handle_monitor_ready(0, 0, MonitorReady { probe: probe(Backend::HighLevel, Some(20)), restore: Some(failed) });
+        assert_eq!(state.monitors[0].percent(), 20);
+        assert_eq!(state.monitors[0].failure_count, 1);
+    }
+
+    #[test]
+    fn test_unsupported_monitor_ignores_input() {
+        let mut state = state_with(&[0.5]);
+        state.handle_monitor_ready(0, 0, MonitorReady { probe: probe(Backend::Unsupported, None), restore: None });
+        assert!(state.monitors[0].ready);
+        assert!(!state.monitors[0].accepts_input());
+        state.apply_step(&[0], 0.1);
+        assert_eq!(values(&state), vec![0.5]);
     }
 }

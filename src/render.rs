@@ -264,7 +264,9 @@ impl Renderer {
                     monitor.name.clone()
                 };
 
-                let ddc_status = if monitor.is_disabled {
+                let ddc_status = if !monitor.ready {
+                    "Detecting\u{2026}"
+                } else if monitor.is_disabled {
                     "Disabled"
                 } else if monitor.write_confirmed {
                     "DDC Active"
@@ -299,14 +301,17 @@ impl Renderer {
                     rt.DrawRectangle(&row.value, self.brush_accent.as_ref().unwrap(), 1.0, None);
                 }
 
-                rt.DrawText(
-                    &pct_text_wide,
-                    self.text_format_label.as_ref().unwrap(),
-                    &row.value,
-                    brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
+                // No value is known until the worker has probed the monitor.
+                if monitor.ready {
+                    rt.DrawText(
+                        &pct_text_wide,
+                        self.text_format_label.as_ref().unwrap(),
+                        &row.value,
+                        brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
 
                 // Slider Track
                 let is_hovered = state.hover_monitor_idx == Some(i);
@@ -319,6 +324,10 @@ impl Renderer {
                 };
                 let track_brush = rt.CreateSolidColorBrush(&track_color, None)?;
                 rt.FillRectangle(&row.track, &track_brush);
+
+                if !monitor.ready {
+                    continue;
+                }
 
                 // Slider Fill
                 let thumb_x = layout::thumb_x(&row.track, brightness_normalized);

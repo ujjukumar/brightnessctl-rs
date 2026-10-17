@@ -17,14 +17,16 @@ mod menu;
 mod actions;
 mod hotkeys;
 mod worker;
+mod log;
 
-use crate::state::{AppState, Monitor};
+use crate::log::debug_log;
+use crate::state::AppState;
 
 use windows::{
     core::*,
     Win32::Foundation::*,
     Win32::UI::WindowsAndMessaging::*,
-    Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect},
+    Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect, UpdateWindow},
     Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE},
     Win32::UI::HiDpi::GetDpiForWindow,
     Win32::System::LibraryLoader::GetModuleHandleW,
@@ -41,30 +43,20 @@ static mut HOTKEY_MANAGER: Option<hotkeys::HotkeyManager> = None;
 // Input state
 static mut DRAGGING_MONITOR_IDX: Option<usize> = None;
 
+/// Posted once the window is up: find the monitors and start their workers.
+const WM_APP_INIT: u32 = WM_APP;
+
 fn main() -> Result<()> {
+    let started = std::time::Instant::now();
+    log::reset();
     unsafe {
         win::init_com()?;
         win::init_dpi()?;
 
-        // Initialize state
+        // Monitors are found after the window is up, so it appears without waiting on them.
         let (settings, config_warning) = Settings::load();
-        let mut monitors = monitors::enumerate_monitors();
-        let current = brightness::probe_all(&mut monitors);
-        apply_probed_values(&mut monitors, current);
-
-        // Smart Restore: only reapply values this app set and confirmed. They are
-        // written once the workers run.
-        let mut restore = Vec::new();
-        for (i, m) in monitors.iter_mut().enumerate() {
-            let saved = m.identity.as_ref().and_then(|ident| settings.get_monitor_state(ident));
-            if let Some(saved) = saved.filter(|s| brightness::should_restore(s)) {
-                m.ui_value = saved.brightness_value as f32 / 100.0;
-                restore.push(i);
-            }
-        }
-
         APP_STATE = Some(AppState {
-            monitors,
+            monitors: Vec::new(),
             settings,
             status_message: config_warning.unwrap_or_else(|| "Ready".to_string()),
             hover_monitor_idx: None,
@@ -83,12 +75,10 @@ fn main() -> Result<()> {
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
         let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
-
-        // Workers report to the window, so they start once it exists.
-        if let Some(state) = APP_STATE.as_mut() {
-            state.start_workers(hwnd);
-            state.request_brightness(&restore);
-        }
+        // Paint now; otherwise the first WM_PAINT would wait behind WM_APP_INIT.
+        let _ = UpdateWindow(hwnd);
+        debug_log!("window shown after {:?}", started.elapsed());
+        let _ = PostMessageW(Some(hwnd), WM_APP_INIT, WPARAM(0), LPARAM(0));
 
         // Initialize hotkeys
         let mut hkm = hotkeys::HotkeyManager::new();
@@ -134,11 +124,16 @@ unsafe fn save_if_dirty() {
     }
 }
 
-/// Sets each slider to the value read from the hardware (0.5 if unreadable).
-fn apply_probed_values(monitors: &mut [Monitor], current: Vec<Option<u32>>) {
-    for (m, value) in monitors.iter_mut().zip(current) {
-        m.ui_value = value.map_or(0.5, |v| v as f32 / 100.0);
-        m.last_requested = value;
+/// Finds the monitors and starts their workers. Only the registry and SetupDi are
+/// read here; each worker talks to its monitor on its own thread.
+unsafe fn start_monitors(window: HWND) {
+    if let Some(state) = APP_STATE.as_mut() {
+        let started = std::time::Instant::now();
+        // Replacing the list drops the old monitors, which stops their workers.
+        state.monitors = monitors::enumerate_monitors();
+        state.start_workers(window);
+        debug_log!("found {} monitors in {:?}", state.monitors.len(), started.elapsed());
+        let _ = InvalidateRect(Some(window), None, false);
     }
 }
 
@@ -180,14 +175,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                         let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                     menu::IDM_REFRESH => {
+                        start_monitors(window);
                         if let Some(state) = APP_STATE.as_mut() {
-                            // Replacing the list drops the old monitors, which stops their workers.
-                            state.monitors = monitors::enumerate_monitors();
-                            let current = brightness::probe_all(&mut state.monitors);
-                            apply_probed_values(&mut state.monitors, current);
-                            state.start_workers(window);
                             state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
-                            let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
                     menu::IDM_LOCK_MODE => {
@@ -336,6 +326,24 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_TIMER if wparam.0 == SAVE_TIMER_ID => {
                 let _ = KillTimer(Some(window), SAVE_TIMER_ID);
                 save_if_dirty();
+                LRESULT(0)
+            }
+            WM_APP_INIT => {
+                start_monitors(window);
+                LRESULT(0)
+            }
+            worker::WM_APP_MONITOR_READY => {
+                // Always take the box, even for a stale generation, so it's freed.
+                let ready = worker::take_ready(lparam);
+                if let Some(state) = APP_STATE.as_mut() {
+                    let (generation, idx) = worker::unpack_target(wparam.0);
+                    if state.handle_monitor_ready(generation, idx, *ready) {
+                        let _ = InvalidateRect(Some(window), None, false);
+                    }
+                    if state.settings_dirty {
+                        SetTimer(Some(window), SAVE_TIMER_ID, SAVE_DELAY_MS, None);
+                    }
+                }
                 LRESULT(0)
             }
             WM_CLOSE => {
@@ -490,19 +498,21 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
             let _ = InvalidateRect(Some(window), None, false);
         }
 
-        // If clicking down, find which slider or label
+        // If clicking down, find which slider or label. Monitors still being probed (or
+        // that can't be controlled) ignore clicks.
         if is_down {
+            let controllable = |idx: usize| state.monitors.get(idx).is_some_and(|m| m.accepts_input());
             match hit {
-                Some(Hit::Value(idx)) => {
+                Some(Hit::Value(idx)) if controllable(idx) => {
                     state.editing_monitor = Some(idx);
-                    state.edit_buffer = state.monitors.get(idx).map_or_else(String::new, |m| m.percent().to_string());
+                    state.edit_buffer = state.monitors[idx].percent().to_string();
                 }
-                Some(Hit::Track(idx)) => {
+                Some(Hit::Track(idx)) if controllable(idx) => {
                     state.editing_monitor = None; // Stop editing if clicking elsewhere
                     DRAGGING_MONITOR_IDX = Some(idx);
                     state.active_monitor_idx = Some(idx);
                 }
-                None => state.editing_monitor = None,
+                _ => state.editing_monitor = None,
             }
             let _ = InvalidateRect(Some(window), None, false);
         }

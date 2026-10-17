@@ -325,15 +325,27 @@ Tasks:
 
 **Problem:** `main` finds the monitors, reads them over DDC and applies Smart Restore writes before the window is even created (`main.rs:44-87`). With DDC delays that can take hundreds of milliseconds or more.
 
-- [ ] Create and show the window first, then `PostMessageW(WM_APP_INIT)`.
-- [ ] In `WM_APP_INIT`, find the monitors. This only reads the registry and SetupDi and doesn't talk to the monitors.
-- [ ] Start one worker per monitor. Each one:
+- [x] Create and show the window first, then `PostMessageW(WM_APP_INIT)`.
+- [x] In `WM_APP_INIT`, find the monitors. This only reads the registry and SetupDi and doesn't talk to the monitors.
+- [x] Start one worker per monitor. Each one:
   - chooses its `Backend` (moved here from item 4),
   - reads the current brightness,
   - applies Smart Restore if there's a saved state with `last_set_by_app && write_confirmed`,
   - posts `WM_APP_MONITOR_READY` with its backend and current value.
-- [ ] Until a monitor reports ready, its row shows `Detecting…` and its slider ignores input.
-- [ ] Debug builds only: log the time until the window appears and how long each write takes.
+- [x] Until a monitor reports ready, its row shows `Detecting…` and its slider ignores input.
+- [x] Debug builds only: log the time until the window appears and how long each write takes.
+
+*Result:*
+- **Startup order.** `UpdateWindow` paints the window before `WM_APP_INIT` runs. Finding the monitors takes about 2 ms.
+- **Probing on the worker.** `brightness::with_probed_backend` runs on the worker thread; `probe_all`, `BackendSpec` and `worker_spec` are gone.
+- **`WM_APP_MONITOR_READY`.** Its `lParam` carries a boxed `MonitorReady` (probe + restore result), taken with `worker::take_ready`. The box is freed even for a stale generation, or if `PostMessageW` fails.
+- **Input gating.** `Monitor::accepts_input` (ready, controllable, not disabled) now gates every input path, so disabled and unsupported monitors no longer move either.
+- **Found by the hardware test: DDC/CI rejects a write sent straight after the probe read** (it failed in under 1 ms). A `worker::Pacer` now spaces *every* transaction (probe, Smart Restore write, writes, read-backs) by `MIN_IO_GAP` = 50 ms, and `MIN_WRITE_GAP` was renamed to match.
+  - Post-probe work is in `worker::serve`, and its tests cover the pacing and Smart Restore.
+  - On hardware, a write straight after the probe now succeeds and is confirmed (about 205–215 ms including gaps).
+- **Debug log.** `log::debug_log!` writes to `brightnessctl.log` next to a debug exe and is compiled out of release builds.
+- **Measured in release** (process start until the window is visible, warm runs, fresh config): about 160 ms before → about 45 ms after. Both monitors report ready about 56 ms and 114 ms after `WM_APP_INIT`.
+- **Item 18, done early:** Refresh Monitors now goes through the same path, so it also applies Smart Restore.
 
 **Done when:** the window appears instantly, sliders become active as each monitor reports in, and dragging is smooth on both desktop monitors.
 
@@ -398,7 +410,7 @@ Tasks:
 - [x] ~~**16. Stable hash**~~: moved into item 1.
 - [ ] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
 - [ ] **18. Refresh.**
-  - Make `IDM_REFRESH` (`main.rs:159-173`) stop and join the worker threads, find the monitors again, and use the startup path, including Smart Restore.
+  - ~~Make `IDM_REFRESH` (`main.rs:159-173`) stop and join the worker threads, find the monitors again, and use the startup path, including Smart Restore.~~ Done in item 9 (`start_monitors`).
   - Reset the hover, active, editing and drag indexes.
   - Refresh automatically on `WM_DISPLAYCHANGE`, delayed with a one-shot timer of about 500 ms.
 

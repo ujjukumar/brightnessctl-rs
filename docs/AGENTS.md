@@ -45,7 +45,7 @@ A native, professional Windows brightness controller for power users and multi-m
 - **Errors:**
   - failing silently is acceptable,
   - **never crash because of a misbehaving monitor**,
-  - log only in debug builds,
+  - log only in debug builds: `log::debug_log!` appends to `brightnessctl.log` next to the exe and compiles away in release builds,
   - no dialogs except Help → About.
 - Release builds use `panic = "abort"`, so a panic kills the app. Don't `unwrap` hardware results, and check indexes before using them.
 
@@ -79,7 +79,8 @@ src/
 ├─ monitors.rs    Monitor enumeration, device ID and EDID lookup (SetupDi + registry)
 ├─ edid.rs        EDID parsing into a MonitorIdentity
 ├─ brightness.rs  Backend probing (high-level → VCP 0x10 → WMI), BrightnessBackend impls, PhysicalHandle
-├─ worker.rs      One I/O thread per monitor: latest-value mailbox, write spacing, WM_APP_WRITE_DONE
+├─ worker.rs      One I/O thread per monitor: probe + Smart Restore, latest-value mailbox, Pacer, WM_APP_* messages
+├─ log.rs         debug_log! macro: brightnessctl.log next to debug builds only
 ├─ wmi.rs         WMI backend for built-in panels (root\WMI)
 ├─ settings.rs    brightnessctl.json load/save, system theme detection
 ├─ hotkeys.rs     RegisterHotKey / UnregisterHotKey wrapper
@@ -88,9 +89,9 @@ src/
 
 ### Data flow
 
-1. **Startup:** set up COM and DPI → load settings → find monitors → probe each backend and read brightness → create the window → start one worker per monitor → request Smart Restore values → register hotkeys → message loop. *(Fix plan #9 changes this to "show window first, detect monitors after".)*
+1. **Startup:** set up COM and DPI → load settings → create and paint the window (`UpdateWindow`) → post `WM_APP_INIT` → register hotkeys → message loop. `WM_APP_INIT` finds the monitors (registry and SetupDi only, about 2 ms) and starts one worker per monitor (`AppState::start_workers`). Each worker probes its monitor (`brightness::with_probed_backend`), applies Smart Restore, and reports `WM_APP_MONITOR_READY` (`AppState::handle_monitor_ready`). Until then the row shows `Detecting…` and ignores input (`Monitor::accepts_input`). Refresh Monitors uses the same path.
 2. **Input** (mouse, wheel, keyboard, hotkeys, menu) changes `Monitor.ui_value`, then calls `AppState::request_brightness(targets)`. That posts the value to each target's worker, unless it is the value last sent.
-3. **Workers** write the newest value, keep `worker::MIN_WRITE_GAP` (50 ms) between writes, and read back the value that ends a burst. Each result goes back to the window as `WM_APP_WRITE_DONE` (`Monitor::apply_write_result`).
+3. **Workers** write the newest value and read back the value that ends a burst. Every transaction (probe, write or read-back) starts at least `worker::MIN_IO_GAP` (50 ms) after the previous one ended (`worker::Pacer`); DDC/CI monitors reject commands sent sooner. Each result goes back to the window as `WM_APP_WRITE_DONE` (`Monitor::apply_write_result`).
 4. **Rendering only reads state.** It never changes anything.
 5. **Brightness is normalized to 0.0–1.0 internally.** A percentage (0–100) is used only for display and at the hardware boundary.
 
@@ -189,7 +190,7 @@ Shown when hovering over a row: name, hardware range, device path, and EDID manu
 2. raw VCP `0x10` (`GetVCPFeatureAndVCPFeatureReply` / `SetVCPFeature`),
 3. WMI for built-in panels: `WmiMonitorBrightness.CurrentBrightness` to read, `WmiMonitorBrightnessMethods.WmiSetBrightness` to write. Both are already percentages.
 
-The backend is chosen **once per monitor** by `brightness::probe_all` (stored as `Monitor.backend`), not tried again on every write.
+The backend is chosen **once per monitor** by its worker (`brightness::with_probed_backend`, reported as `Monitor.backend`), not tried again on every write.
 
 **WMI notes:**
 - WMI is connected lazily, only when a monitor fails both Dxva2 paths.
@@ -203,10 +204,10 @@ The backend is chosen **once per monitor** by `brightness::probe_all` (stored as
 **Reliability:**
 - After the write that ends a burst, the worker reads the value back (`BrightnessBackend::verify`) to set `write_confirmed`. In-between writes aren't read back, and they leave the flag unchanged.
 - Disable a monitor after **10 consecutive failures** (`Monitor::apply_write_result`). Refresh Monitors re-enables it.
-- Don't flood the DDC/CI bus. Each worker keeps only the newest requested value and leaves at least `MIN_WRITE_GAP` (50 ms) between writes. Values in between are skipped; the final one is never lost.
+- Don't flood the DDC/CI bus. Each worker keeps only the newest requested value, and every transaction starts at least `MIN_IO_GAP` (50 ms) after the previous one ended. Values in between are skipped; the final one is never lost. Without the gap, a write sent right after the probe read fails.
 - **Ownership:** a monitor's `PhysicalHandle` moves into its worker. Dropping a `Monitor` stops and joins the worker, which then destroys the handle. Results carry a worker generation, so results from before a Refresh are ignored.
 
-**Smart Restore:** on startup, restore the saved value **only if** `last_set_by_app && write_confirmed`. Otherwise use the monitor's current value. Never overwrite a value the user changed outside the app.
+**Smart Restore:** when its worker starts, a monitor gets its saved value back **only if** `last_set_by_app && write_confirmed`, and only if it differs from the value just read. Otherwise the monitor keeps its current value. The worker writes the saved value before reporting ready (`MonitorReady.restore`). Never overwrite a value the user changed outside the app.
 
 ### 5.3 Input
 
