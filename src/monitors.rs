@@ -1,6 +1,6 @@
-use crate::state::Monitor;
+use crate::state::{Backend, Monitor};
 use windows::core::{BOOL, PCWSTR, GUID};
-use windows::Win32::Foundation::{LPARAM, RECT, HWND, POINT};
+use windows::Win32::Foundation::{HANDLE, LPARAM, RECT, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFO, MONITORINFOEXW,
     EnumDisplayDevicesW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ACTIVE, MonitorFromPoint, MONITOR_DEFAULTTONULL,
@@ -74,10 +74,16 @@ fn from_wide_nul(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
-/// Returns the device instance IDs of the active monitors attached to `hmonitor`,
-/// in the order Windows enumerates them.
-fn get_monitor_instance_ids(hmonitor: HMONITOR) -> Vec<String> {
-    let mut ids = Vec::new();
+/// An active monitor device attached to a display output.
+struct DisplayDevice {
+    instance_id: String,
+    name: String,
+}
+
+/// Returns the active monitor devices attached to `hmonitor`, in the order
+/// Windows enumerates them.
+fn get_display_devices(hmonitor: HMONITOR) -> Vec<DisplayDevice> {
+    let mut devices = Vec::new();
     unsafe {
         let mut mi = MONITORINFOEXW {
             monitorInfo: MONITORINFO {
@@ -87,7 +93,7 @@ fn get_monitor_instance_ids(hmonitor: HMONITOR) -> Vec<String> {
             ..Default::default()
         };
         if !GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _).as_bool() {
-            return ids;
+            return devices;
         }
 
         let mut index = 0;
@@ -104,12 +110,15 @@ fn get_monitor_instance_ids(hmonitor: HMONITOR) -> Vec<String> {
             if dd.StateFlags.0 & DISPLAY_DEVICE_ACTIVE.0 == 0 {
                 continue;
             }
-            if let Some(id) = interface_path_to_instance_id(&from_wide_nul(&dd.DeviceID)) {
-                ids.push(id);
+            if let Some(instance_id) = interface_path_to_instance_id(&from_wide_nul(&dd.DeviceID)) {
+                devices.push(DisplayDevice {
+                    instance_id,
+                    name: from_wide_nul(&dd.DeviceString),
+                });
             }
         }
     }
-    ids
+    devices
 }
 
 fn get_edid_from_registry(target_device_id: &str) -> Option<Vec<u8>> {
@@ -201,46 +210,57 @@ impl Drop for KeyGuard {
 extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut RECT, lparam: LPARAM) -> BOOL {
     unsafe {
         let monitors = &mut *(lparam.0 as *mut Vec<Monitor>);
-        
+        let devices = get_display_devices(hmonitor);
+
+        let mut physical_monitors = Vec::new();
         let mut number_of_physical_monitors = 0;
-        if GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &mut number_of_physical_monitors).is_err() || number_of_physical_monitors == 0 {
-            return BOOL::from(true);
+        if GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &mut number_of_physical_monitors).is_ok() && number_of_physical_monitors > 0 {
+            let mut buffer = vec![PHYSICAL_MONITOR::default(); number_of_physical_monitors as usize];
+            if GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut buffer).is_ok() {
+                physical_monitors = buffer;
+            }
         }
-        let mut physical_monitors = vec![PHYSICAL_MONITOR::default(); number_of_physical_monitors as usize];
-        if GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut physical_monitors).is_err() {
+
+        if physical_monitors.is_empty() {
+            // Without a Dxva2 handle a built-in panel can still be controlled through WMI.
+            for device in devices {
+                monitors.push(new_monitor(None, hmonitor, device.name, device.instance_id));
+            }
             return BOOL::from(true);
         }
 
         // With cloned displays one HMONITOR has several physical monitors. Windows offers
         // no direct link between a physical monitor and its display device, so pair by index.
-        let instance_ids = get_monitor_instance_ids(hmonitor);
-
         for (i, pm) in physical_monitors.into_iter().enumerate() {
             let desc = pm.szPhysicalMonitorDescription; // copy out of the packed struct
-            let device_path = instance_ids.get(i).cloned().unwrap_or_default();
-            let identity = get_edid_blob(&device_path).and_then(|blob| crate::edid::parse_identity(&blob));
-
-            monitors.push(Monitor {
-                physical: pm.hPhysicalMonitor,
-                hmonitor: hmonitor.0 as isize,
-                name: from_wide_nul(&desc),
-                identity,
-                normalized_value: 0.0,
-                last_set_by_app: false,
-                write_confirmed: false,
-                timestamp: 0,
-                device_path,
-                last_write_time: None,
-                failure_count: 0,
-                is_disabled: false,
-                hardware_min: 0,
-                hardware_max: 100,
-                observed_min: 0,
-                observed_max: 100,
-            });
+            let device_path = devices.get(i).map(|d| d.instance_id.clone()).unwrap_or_default();
+            monitors.push(new_monitor(Some(pm.hPhysicalMonitor), hmonitor, from_wide_nul(&desc), device_path));
         }
     }
     BOOL::from(true)
+}
+
+fn new_monitor(physical: Option<HANDLE>, hmonitor: HMONITOR, name: String, device_path: String) -> Monitor {
+    let identity = get_edid_blob(&device_path).and_then(|blob| crate::edid::parse_identity(&blob));
+    Monitor {
+        physical,
+        hmonitor: hmonitor.0 as isize,
+        name,
+        identity,
+        backend: Backend::Unsupported,
+        normalized_value: 0.0,
+        last_set_by_app: false,
+        write_confirmed: false,
+        timestamp: 0,
+        device_path,
+        last_write_time: None,
+        failure_count: 0,
+        is_disabled: false,
+        hardware_min: 0,
+        hardware_max: 100,
+        observed_min: 0,
+        observed_max: 100,
+    }
 }
 
 #[cfg(test)]
@@ -297,7 +317,7 @@ mod tests {
         let monitors = enumerate_monitors();
         assert!(!monitors.is_empty());
         for m in &monitors {
-            println!("{} | {} | {:?}", m.name, m.device_path, m.identity.as_ref().map(|i| i.composite_key()));
+            println!("{} | {:?} | {} | {:?}", m.name, m.physical, m.device_path, m.identity.as_ref().map(|i| i.composite_key()));
             assert!(!m.device_path.is_empty(), "no device path for {}", m.name);
             assert!(m.identity.is_some(), "no identity for {} ({})", m.name, m.device_path);
         }

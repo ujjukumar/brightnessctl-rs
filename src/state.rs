@@ -18,12 +18,28 @@ impl MonitorIdentity {
     }
 }
 
+/// How a monitor's brightness is controlled. Chosen once by `brightness::probe_all`.
+#[derive(Debug)]
+pub enum Backend {
+    /// Not probed yet, or no API could read the monitor.
+    Unsupported,
+    /// Dxva2 high-level monitor API (DDC/CI underneath).
+    HighLevel,
+    /// Raw DDC/CI VCP code 0x10, for monitors whose capabilities string lacks brightness.
+    Vcp { max: u32 },
+    /// WMI, for built-in laptop panels.
+    Wmi(crate::wmi::Panel),
+}
+
 #[derive(Debug)]
 pub struct Monitor {
-    pub physical: HANDLE,
+    /// Dxva2 physical monitor handle. Handles start at 0, so `None` (not a null
+    /// handle) marks a display without one.
+    pub physical: Option<HANDLE>,
     pub hmonitor: isize,
     pub name: String,
     pub identity: Option<MonitorIdentity>,
+    pub backend: Backend,
     pub normalized_value: f32,
     pub last_set_by_app: bool,
     pub write_confirmed: bool,
@@ -53,11 +69,13 @@ impl Monitor {
 
 impl Drop for Monitor {
     fn drop(&mut self) {
-        unsafe {
-            if !self.physical.is_invalid() {
-                let mut pm = PHYSICAL_MONITOR::default();
-                pm.hPhysicalMonitor = self.physical;
-                let _ = DestroyPhysicalMonitors(&[pm]); 
+        if let Some(handle) = self.physical {
+            let pm = PHYSICAL_MONITOR {
+                hPhysicalMonitor: handle,
+                ..Default::default()
+            };
+            unsafe {
+                let _ = DestroyPhysicalMonitors(&[pm]);
             }
         }
     }

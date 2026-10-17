@@ -78,14 +78,14 @@ src/
 ├─ state.rs       Monitor, MonitorIdentity, AppState; step/preset/sync math
 ├─ monitors.rs    Monitor enumeration, device ID and EDID lookup (SetupDi + registry)
 ├─ edid.rs        EDID parsing into a MonitorIdentity
-├─ brightness.rs  Hardware get/set: high-level API → raw VCP 0x10, failure counting
+├─ brightness.rs  Backend probing (high-level → VCP 0x10 → WMI), writes, failure counting
+├─ wmi.rs         WMI backend for built-in panels (root\WMI)
 ├─ settings.rs    brightnessctl.json load/save, system theme detection
 ├─ hotkeys.rs     RegisterHotKey / UnregisterHotKey wrapper
 └─ actions.rs     Action enum (hotkey IDs)
 ```
 
 Planned new modules (fix plan):
-- `wmi.rs`: WMI backend for built-in panels (#4),
 - `worker.rs`: per-monitor I/O threads (#6).
 
 ### Data flow
@@ -98,7 +98,7 @@ Planned new modules (fix plan):
 ### Rules
 
 - One slider per physical monitor.
-- Free physical monitor handles when a monitor is dropped (`DestroyPhysicalMonitors`).
+- Free physical monitor handles when a monitor is dropped (`DestroyPhysicalMonitors`). Dxva2 handles start at **0**, so a monitor's handle is `Option<HANDLE>`. Never use `HANDLE::is_invalid()` on them. Displays without a handle are kept, because WMI may still control them.
 - Hit-testing and rendering must use the **same** layout code: `layout::compute`.
 - **DPI:** all layout is in DIPs (96 per inch). The render target is created at `GetDpiForWindow` and follows DPI changes with `SetDpi`. Mouse coordinates are converted with `layout::px_to_dip` before hit-testing. `WM_DPICHANGED` applies the window rect Windows suggests. The default client area is 384×544 DIPs.
 
@@ -187,9 +187,14 @@ Shown when hovering over a row: name, hardware range, device path, and EDID manu
 **Backend order:**
 1. high-level `Get/SetMonitorBrightness`,
 2. raw VCP `0x10` (`GetVCPFeatureAndVCPFeatureReply` / `SetVCPFeature`),
-3. WMI for built-in panels *(→ fix plan #4)*.
+3. WMI for built-in panels: `WmiMonitorBrightness.CurrentBrightness` to read, `WmiMonitorBrightnessMethods.WmiSetBrightness` to write. Both are already percentages.
 
-The backend is chosen **once per monitor**, not tried again on every write.
+The backend is chosen **once per monitor** by `brightness::probe_all` (stored as `Monitor.backend`), not tried again on every write.
+
+**WMI notes:**
+- WMI is connected lazily, only when a monitor fails both Dxva2 paths.
+- A WMI `InstanceName` is the device instance ID plus `_0` (`wmi::instance_matches`).
+- `CoSetProxyBlanket` must receive the interface proxy itself (`IWbemServices`, `IEnumWbemClassObject`), never a cast `IUnknown`. Otherwise every call fails with `WBEM_E_ACCESS_DENIED`.
 
 **Values:**
 - Normalize to 0–100 at the hardware boundary using the device's min/max, with rounding *(→ fix plan #15)*.
@@ -329,6 +334,7 @@ then publishes a GitHub Release with generated notes.
 Useful checks:
 
 ```powershell
+cargo test -- --ignored --nocapture --test-threads=1   # read-only hardware tests: identities, WMI matching, backend probe
 Get-PnpDevice -Class Monitor -PresentOnly | Select InstanceId, FriendlyName
 Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness
 ```

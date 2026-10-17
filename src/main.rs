@@ -8,6 +8,7 @@ mod window;
 mod monitors;
 mod brightness;
 mod edid;
+mod wmi;
 mod state;
 mod render;
 mod layout;
@@ -47,30 +48,22 @@ fn main() -> Result<()> {
         // Initialize state
         let settings = Settings::load();
         let mut monitors = monitors::enumerate_monitors();
+        let current = brightness::probe_all(&mut monitors);
         let mut initial_brightness = Vec::new();
 
-        for m in &mut monitors {
-            let mut applied = false;
-            
-            // Smart Restore Logic
-            if let Some(ident) = &m.identity {
-                if let Some(saved) = settings.get_monitor_state(ident) {
-                    if saved.last_set_by_app && saved.write_confirmed {
-                        if brightness::set_brightness(m, saved.brightness_value) {
-                            initial_brightness.push(saved.brightness_value as f32 / 100.0);
-                            applied = true;
-                        }
-                    }
+        for (m, current) in monitors.iter_mut().zip(current) {
+            let mut value = current;
+
+            // Smart Restore: only reapply values this app set and confirmed.
+            let saved = m.identity.as_ref().and_then(|ident| settings.get_monitor_state(ident));
+            if let Some(saved) = saved.filter(|s| brightness::should_restore(s)) {
+                let saved_value = saved.brightness_value;
+                if brightness::set_brightness(m, saved_value) {
+                    value = Some(saved_value);
                 }
             }
 
-            if !applied {
-                if let Some(b) = brightness::get_brightness(m) {
-                    initial_brightness.push(b as f32 / 100.0);
-                } else {
-                    initial_brightness.push(0.5); // Default if read fails
-                }
-            }
+            initial_brightness.push(value.map_or(0.5, |b| b as f32 / 100.0)); // 0.5 if unreadable
         }
 
         APP_STATE = Some(AppState {
@@ -162,14 +155,10 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_REFRESH => {
                         if let Some(state) = APP_STATE.as_mut() {
                             state.monitors = monitors::enumerate_monitors();
-                            state.brightness.clear();
-                            for m in &mut state.monitors {
-                                if let Some(b) = brightness::get_brightness(m) {
-                                    state.brightness.push(b as f32 / 100.0);
-                                } else {
-                                    state.brightness.push(0.5);
-                                }
-                            }
+                            state.brightness = brightness::probe_all(&mut state.monitors)
+                                .into_iter()
+                                .map(|b| b.map_or(0.5, |b| b as f32 / 100.0))
+                                .collect();
                             state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
                             let _ = InvalidateRect(Some(window), None, false);
                         }

@@ -163,21 +163,34 @@ Test on the laptop's built-in screen.
 
 **Problem:** `GetMonitorBrightness`/`SetMonitorBrightness` (Dxva2's high-level monitor API) only work over DDC/CI. Built-in laptop panels don't support DDC/CI; Windows controls them through ACPI/WMI. There's no fallback, so a laptop panel shows 50% and is disabled after 10 failed writes. That contradicts the README.
 
-- [ ] Add a `Backend` enum to `Monitor`:
+- [x] Add a `Backend` enum to `Monitor`:
   ```rust
   enum Backend { HighLevel, Vcp { max: u32 }, Wmi { instance: String }, Unsupported }
   ```
   Choose it **once**, when monitors are detected, by trying the backends in order: HighLevel → VCP `0x10` → WMI. In item 9 this probing moves into the worker thread.
-- [ ] Add `src/wmi.rs`:
+- [x] Add `src/wmi.rs`:
   - connect with `IWbemLocator` (`WbemLocator` CLSID) → `ConnectServer("root\\WMI")`,
   - read: `SELECT InstanceName, CurrentBrightness, Level FROM WmiMonitorBrightness`,
   - write: `WmiMonitorBrightnessMethods.WmiSetBrightness(Timeout: u32 = 0, Brightness: u8 0–100)` via `ExecMethod`.
-- [ ] Match a WMI `InstanceName` to a monitor. It is expected to be the device instance ID plus a `_0` suffix (check with `Get-CimInstance` on the laptop). Strip the suffix and compare, ignoring case, with `Monitor.device_path` from item 1.
-- [ ] Add these to the `windows` features in `Cargo.toml` (both exist in windows 0.62.2):
+- [x] Match a WMI `InstanceName` to a monitor. It is expected to be the device instance ID plus a `_0` suffix (check with `Get-CimInstance` on the laptop). Strip the suffix and compare, ignoring case, with `Monitor.device_path` from item 1.
+- [x] Add these to the `windows` features in `Cargo.toml` (both exist in windows 0.62.2):
   - `Win32_System_Wmi`
   - `Win32_System_Variant`
-- [ ] Unit tests for the pure parts: instance-name matching, and mapping the panel's supported levels to 0–100.
-- [ ] Re-check that the release binary is under 1 MB.
+- [x] Unit tests for the pure parts: instance-name matching, and mapping the panel's supported levels to 0–100.
+- [x] Re-check that the release binary is under 1 MB.
+
+*Result:*
+- **`Backend::Wmi(wmi::Panel)`.** The panel holds its WMI connection, instance name, method path and a reusable in-parameters object, so writes don't look anything up again.
+- **Probing.** `brightness::probe_all` chooses each backend and returns current values. WMI is connected only if a monitor fails both Dxva2 paths.
+- **Levels.** WMI reads and writes are already percentages (the driver snaps to supported levels), so `Level` isn't read. The unit tests cover instance matching and `VARIANT` conversions instead.
+- **Name format.** On the desktop, `WmiMonitorID` (same `InstanceName` format) confirms `<instance ID>_0`, and the ignored test `test_wmi_instances_match_enumerated_monitors` checks the matching.
+- **COM gotcha.** `CoSetProxyBlanket` must be given the `IWbemServices` / enumerator proxy itself. Passing a cast `IUnknown` sets the wrong proxy and every query fails with `WBEM_E_ACCESS_DENIED`.
+- **Found while testing: physical monitor handles start at `0`.** `Monitor.physical` is now `Option<HANDLE>`. Before, handle 0 was treated as invalid and never freed.
+- **Displays without a Dxva2 handle** are kept, with `physical: None`, so WMI can still control them.
+- **VCP writes** use the maximum cached at probe time. Each write is now SET + read-back instead of GET + SET + GET.
+- **Release binary:** 232,448 bytes.
+- **Hardware test.** The ignored test `test_probe_all_reads_every_monitor` reads (never writes) every monitor. On the desktop both monitors probe as `HighLevel`.
+- **Still to check on the laptop:** the WMI write path.
 
 **Done when:** the Acer Aspire's built-in panel can be controlled with the slider, the wheel and the hotkeys, and the desktop's DDC monitors still work.
 
