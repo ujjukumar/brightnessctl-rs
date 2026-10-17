@@ -363,7 +363,7 @@ Tasks:
 
 Tasks:
 
-- [ ] Add a pure `parse_percent(&str) -> Option<f32>`. Tests:
+- [x] Add a pure `parse_percent(&str) -> Option<f32>`. Tests:
 
   | Input | Result |
   |---|---|
@@ -373,9 +373,16 @@ Tasks:
   | `"150"` | `1.0` |
   | `"abc"` | `None` |
 
-- [ ] Use `char::from_u32(ch as u32)` and accept only ASCII digits.
-- [ ] Commit the typed value when the user clicks elsewhere (including another monitor's label) and on `WM_KILLFOCUS`. `Esc` still cancels.
-- [ ] Commit through `request_brightness` (item 6).
+- [x] Use `char::from_u32(ch as u32)` and accept only ASCII digits.
+- [x] Commit the typed value when the user clicks elsewhere (including another monitor's label) and on `WM_KILLFOCUS`. `Esc` still cancels.
+- [x] Commit through `request_brightness` (item 6).
+
+*Result:*
+- **Editing moved into `AppState`:** `begin_edit`, `edit_input`, `commit_edit` and `cancel_edit`, all unit-tested. The Win32 handlers only forward to them.
+- **Clicks.** Clicking the label already being edited keeps editing. Clicking any other spot commits, and so does clicking another monitor's label before it opens.
+- **`parse_percent`** also rejects signs and non-ASCII digits. An overflowing digit string clamps to 100%.
+- **Gating.** Editing requires `Monitor::accepts_input`, so a monitor that is still detecting can't be edited.
+- **Checked end to end** by posting a click, characters and `WM_KILLFOCUS` to a temporary copy of the app. Focus loss committed 25% with exactly one write, and Enter restored 24% with one write.
 
 ### 11. Show the correct control method in labels
 

@@ -222,11 +222,11 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 - Coarse step **0.05**, or fine step **0.01** while holding **Shift**. No other modifiers are read, to avoid clashing with hotkeys.
 - Clamped to 0–1, never wraps.
 
-**Typed value:**
-- Clicking the percentage label turns it into an edit field (up to 3 digits).
-- **Enter** or **losing focus** commits *(focus loss → fix plan #10)*; **Esc** cancels.
-- Commits produce exactly one write.
-- Values are clamped to 0–100. After commit or cancel the label shows a whole-number percentage again.
+**Typed value** (`AppState::begin_edit` / `edit_input` / `commit_edit` / `cancel_edit`):
+- Clicking the percentage label turns it into an edit field (ASCII digits only, up to 3).
+- **Enter**, **losing focus** (`WM_KILLFOCUS`), or clicking anywhere else commits, including clicking another monitor's label. **Esc** cancels. Empty or invalid text keeps the old value.
+- Commits produce exactly one write, and nothing is written while typing.
+- Values above 100 are clamped (`parse_percent`). After commit or cancel the label shows a whole-number percentage again.
 
 **Global hotkeys:**
 - Defined in the config; the defaults are:

@@ -329,6 +329,69 @@ impl AppState {
             }
         }
     }
+
+    /// Turns the percentage label of monitor `idx` into an edit field. Any other edit in
+    /// progress is committed first; clicking the label already being edited does nothing.
+    pub fn begin_edit(&mut self, idx: usize) {
+        if self.editing_monitor == Some(idx) {
+            return;
+        }
+        self.commit_edit();
+        if let Some(m) = self.monitors.get(idx).filter(|m| m.accepts_input()) {
+            self.edit_buffer = m.percent().to_string();
+            self.editing_monitor = Some(idx);
+        }
+    }
+
+    /// Handles a typed character: digits (up to 3) and backspace.
+    /// Returns true if the edit field changed.
+    pub fn edit_input(&mut self, ch: char) -> bool {
+        if self.editing_monitor.is_none() {
+            return false;
+        }
+        match ch {
+            '0'..='9' if self.edit_buffer.len() < MAX_EDIT_DIGITS => {
+                self.edit_buffer.push(ch);
+                true
+            }
+            '\u{8}' => self.edit_buffer.pop().is_some(),
+            _ => false,
+        }
+    }
+
+    /// Applies the edited value with one write (invalid text keeps the old value) and
+    /// closes the edit field. Returns true if an edit was open.
+    pub fn commit_edit(&mut self) -> bool {
+        let Some(idx) = self.editing_monitor.take() else {
+            return false;
+        };
+        if let Some(value) = parse_percent(&self.edit_buffer) {
+            self.set_absolute(&[idx], value);
+            self.request_brightness(&[idx]);
+        }
+        self.edit_buffer.clear();
+        true
+    }
+
+    /// Closes the edit field without applying it. Returns true if an edit was open.
+    pub fn cancel_edit(&mut self) -> bool {
+        self.edit_buffer.clear();
+        self.editing_monitor.take().is_some()
+    }
+}
+
+/// The longest number the edit field accepts ("100").
+const MAX_EDIT_DIGITS: usize = 3;
+
+/// Parses typed percentage text (digits only) into a slider value, clamping
+/// anything above 100 to 1.0.
+pub fn parse_percent(text: &str) -> Option<f32> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // Only digits are left, so parsing can only fail by overflowing: that's above 100 too.
+    let percent = text.parse::<u32>().unwrap_or(u32::MAX);
+    Some(percent.min(100) as f32 / 100.0)
 }
 
 #[cfg(test)]
@@ -643,5 +706,118 @@ mod tests {
         assert!(!state.monitors[0].accepts_input());
         state.apply_step(&[0], 0.1);
         assert_eq!(values(&state), vec![0.5]);
+    }
+
+    #[test]
+    fn test_parse_percent() {
+        assert_eq!(parse_percent(""), None);
+        assert_eq!(parse_percent("0"), Some(0.0));
+        assert_eq!(parse_percent("007"), Some(0.07));
+        assert_eq!(parse_percent("100"), Some(1.0));
+        assert_eq!(parse_percent("150"), Some(1.0));
+        assert_eq!(parse_percent("99999999999"), Some(1.0));
+        assert_eq!(parse_percent("abc"), None);
+        assert_eq!(parse_percent("+5"), None);
+        assert_eq!(parse_percent("-5"), None);
+        assert_eq!(parse_percent("\u{0663}"), None, "non-ASCII digits are rejected");
+    }
+
+    /// A state with workers whose mailboxes the test can inspect.
+    fn editable(values: &[f32]) -> (AppState, Vec<Arc<Mailbox>>) {
+        let mut state = state_with(values);
+        let mailboxes: Vec<_> = state
+            .monitors
+            .iter_mut()
+            .map(|m| {
+                let mailbox = Arc::new(Mailbox::default());
+                m.worker = Some(Worker::detached(Arc::clone(&mailbox)));
+                m.last_requested = Some(m.percent());
+                mailbox
+            })
+            .collect();
+        (state, mailboxes)
+    }
+
+    fn type_text(state: &mut AppState, text: &str) {
+        for ch in text.chars() {
+            state.edit_input(ch);
+        }
+    }
+
+    #[test]
+    fn test_edit_commit_writes_once() {
+        let (mut state, mailboxes) = editable(&[0.5]);
+        state.begin_edit(0);
+        assert_eq!(state.edit_buffer, "50");
+
+        type_text(&mut state, "\u{8}\u{8}3");
+        assert_eq!(mailboxes[0].take_pending(), None, "nothing is written while typing");
+        type_text(&mut state, "0");
+        assert_eq!(state.edit_buffer, "30");
+
+        assert!(state.commit_edit());
+        assert_eq!(state.editing_monitor, None);
+        assert_eq!(values(&state), vec![0.3]);
+        assert_eq!(mailboxes[0].take_pending(), Some(30));
+        assert!(!state.commit_edit(), "nothing left to commit");
+    }
+
+    #[test]
+    fn test_edit_cancel_and_invalid_input_keep_value() {
+        let (mut state, mailboxes) = editable(&[0.5]);
+        state.begin_edit(0);
+        type_text(&mut state, "\u{8}\u{8}9");
+        assert!(state.cancel_edit());
+        assert_eq!(values(&state), vec![0.5]);
+
+        // An emptied field reverts too.
+        state.begin_edit(0);
+        type_text(&mut state, "\u{8}\u{8}\u{8}");
+        state.commit_edit();
+        assert_eq!(values(&state), vec![0.5]);
+
+        // Letters never reach the buffer, and it holds at most 3 digits.
+        state.begin_edit(0);
+        assert!(!state.edit_input('a'));
+        assert!(!state.edit_input('\u{0663}'));
+        assert_eq!(state.edit_buffer, "50");
+        assert!(state.edit_input('0'));
+        assert!(!state.edit_input('1'));
+        assert_eq!(state.edit_buffer, "500");
+        state.cancel_edit();
+        assert_eq!(mailboxes[0].take_pending(), None, "nothing was committed");
+
+        // Committing the unchanged value writes nothing.
+        state.begin_edit(0);
+        state.commit_edit();
+        assert_eq!(mailboxes[0].take_pending(), None, "unchanged value isn't written");
+    }
+
+    #[test]
+    fn test_editing_another_label_commits_the_first() {
+        let (mut state, mailboxes) = editable(&[0.5, 0.6]);
+        state.begin_edit(0);
+        type_text(&mut state, "\u{8}\u{8}20");
+
+        // Clicking the same label keeps editing.
+        state.begin_edit(0);
+        assert_eq!(state.edit_buffer, "20");
+
+        state.begin_edit(1);
+        assert_eq!(state.editing_monitor, Some(1));
+        assert_eq!(state.edit_buffer, "60");
+        assert_eq!(values(&state), vec![0.2, 0.6]);
+        assert_eq!(mailboxes[0].take_pending(), Some(20));
+    }
+
+    #[test]
+    fn test_edit_requires_controllable_monitor() {
+        let (mut state, _) = editable(&[0.5]);
+        state.monitors[0].ready = false;
+        state.begin_edit(0);
+        assert_eq!(state.editing_monitor, None);
+        assert!(!state.edit_input('1'));
+        state.begin_edit(3);
+        assert_eq!(state.editing_monitor, None);
     }
 }

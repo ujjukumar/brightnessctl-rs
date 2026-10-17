@@ -46,6 +46,15 @@ pub enum Hit {
     Track(usize),
 }
 
+impl Hit {
+    /// The row that was hit.
+    pub fn index(self) -> usize {
+        match self {
+            Hit::Value(i) | Hit::Track(i) => i,
+        }
+    }
+}
+
 /// Lays out a client area of `width` x `height` DIPs holding `row_count` monitors.
 pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
     let content_right = MARGIN + (width - 2.0 * MARGIN).max(1.0);

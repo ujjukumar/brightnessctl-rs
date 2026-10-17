@@ -27,7 +27,7 @@ use windows::{
     Win32::Foundation::*,
     Win32::UI::WindowsAndMessaging::*,
     Win32::Graphics::Gdi::{PAINTSTRUCT, BeginPaint, EndPaint, InvalidateRect, UpdateWindow},
-    Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE},
+    Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE, VIRTUAL_KEY, VK_ESCAPE, VK_RETURN},
     Win32::UI::HiDpi::GetDpiForWindow,
     Win32::System::LibraryLoader::GetModuleHandleW,
 };
@@ -150,11 +150,20 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
     unsafe {
         match message {
             WM_KEYDOWN => {
-                handle_keydown(window, wparam.0 as u16);
+                handle_keydown(window, VIRTUAL_KEY(wparam.0 as u16));
                 LRESULT(0)
             }
             WM_CHAR => {
-                handle_char(window, wparam.0 as u16);
+                handle_char(window, wparam.0 as u32);
+                LRESULT(0)
+            }
+            WM_KILLFOCUS => {
+                // Leaving the window commits a typed value, like clicking elsewhere.
+                if let Some(state) = APP_STATE.as_mut()
+                    && state.commit_edit()
+                {
+                    let _ = InvalidateRect(Some(window), None, false);
+                }
                 LRESULT(0)
             }
             WM_MOUSEWHEEL => {
@@ -365,42 +374,26 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
-unsafe fn handle_keydown(window: HWND, vk: u16) {
+unsafe fn handle_keydown(window: HWND, vk: VIRTUAL_KEY) {
     if let Some(state) = APP_STATE.as_mut() {
-        if let Some(idx) = state.editing_monitor {
-            match vk {
-                0x0D => { // VK_RETURN
-                    if let Ok(val_u32) = state.edit_buffer.parse::<u32>() {
-                        state.set_absolute(&[idx], (val_u32 as f32 / 100.0).clamp(0.0, 1.0));
-                        state.request_brightness(&[idx]);
-                    }
-                    state.editing_monitor = None;
-                    let _ = InvalidateRect(Some(window), None, false);
-                }
-                0x1B => { // VK_ESCAPE
-                    state.editing_monitor = None;
-                    let _ = InvalidateRect(Some(window), None, false);
-                }
-                _ => {}
-            }
+        let changed = match vk {
+            VK_RETURN => state.commit_edit(),
+            VK_ESCAPE => state.cancel_edit(),
+            _ => false,
+        };
+        if changed {
+            let _ = InvalidateRect(Some(window), None, false);
         }
     }
 }
 
-unsafe fn handle_char(window: HWND, ch: u16) {
-    if let Some(state) = APP_STATE.as_mut() {
-        if state.editing_monitor.is_some() {
-            let c = ch as u8 as char;
-            if c.is_ascii_digit() {
-                if state.edit_buffer.len() < 3 {
-                    state.edit_buffer.push(c);
-                    let _ = InvalidateRect(Some(window), None, false);
-                }
-            } else if ch == 0x08 { // Backspace
-                state.edit_buffer.pop();
-                let _ = InvalidateRect(Some(window), None, false);
-            }
-        }
+/// `unit` is a UTF-16 code unit from `WM_CHAR`; surrogates never map to a digit.
+unsafe fn handle_char(window: HWND, unit: u32) {
+    if let Some(state) = APP_STATE.as_mut()
+        && let Some(ch) = char::from_u32(unit)
+        && state.edit_input(ch)
+    {
+        let _ = InvalidateRect(Some(window), None, false);
     }
 }
 
@@ -499,20 +492,20 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         }
 
         // If clicking down, find which slider or label. Monitors still being probed (or
-        // that can't be controlled) ignore clicks.
+        // that can't be controlled) ignore clicks. Clicking anywhere but the label being
+        // edited commits the typed value.
         if is_down {
-            let controllable = |idx: usize| state.monitors.get(idx).is_some_and(|m| m.accepts_input());
+            let hit = hit.filter(|h| state.monitors.get(h.index()).is_some_and(|m| m.accepts_input()));
             match hit {
-                Some(Hit::Value(idx)) if controllable(idx) => {
-                    state.editing_monitor = Some(idx);
-                    state.edit_buffer = state.monitors[idx].percent().to_string();
-                }
-                Some(Hit::Track(idx)) if controllable(idx) => {
-                    state.editing_monitor = None; // Stop editing if clicking elsewhere
+                Some(Hit::Value(idx)) => state.begin_edit(idx),
+                Some(Hit::Track(idx)) => {
+                    state.commit_edit();
                     DRAGGING_MONITOR_IDX = Some(idx);
                     state.active_monitor_idx = Some(idx);
                 }
-                _ => state.editing_monitor = None,
+                None => {
+                    state.commit_edit();
+                }
             }
             let _ = InvalidateRect(Some(window), None, false);
         }
