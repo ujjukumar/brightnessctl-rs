@@ -257,8 +257,14 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_SIZE => {
-                 let _ = InvalidateRect(Some(window), None, false);
-                 LRESULT(0)
+                // lParam holds the new client width and height in pixels.
+                if let Some(renderer) = RENDERER.as_mut() {
+                    let width = (lparam.0 & 0xFFFF) as u32;
+                    let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
+                    renderer.resize(width, height);
+                }
+                let _ = InvalidateRect(Some(window), None, false);
+                LRESULT(0)
             }
             WM_DPICHANGED => {
                 // lParam points to the size and position Windows suggests for the new DPI.

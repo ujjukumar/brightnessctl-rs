@@ -310,8 +310,14 @@ Tasks:
 
 **Problem:** the result of `EndDraw` is ignored (`render.rs:456`). After `D2DERR_RECREATE_TARGET` (driver reset, GPU switch, some remote desktop sessions), the drawing surface is never recreated. Also, `Resize` is called on every paint.
 
-- [ ] Check the `EndDraw` result. On `D2DERR_RECREATE_TARGET`, throw away only the device-dependent resources (drawing surface and brushes, but keep the text formats) and redraw.
-- [ ] Add `Renderer::resize(w, h)` and call it from `WM_SIZE`. Remove the per-paint `Resize`.
+- [x] Check the `EndDraw` result. On `D2DERR_RECREATE_TARGET`, throw away only the device-dependent resources (drawing surface and brushes, but keep the text formats) and redraw.
+- [x] Add `Renderer::resize(w, h)` and call it from `WM_SIZE`. Remove the per-paint `Resize`.
+
+*Result:*
+- `discard_device_resources` drops the drawing surface and brushes and keeps the text formats. `render` calls it on `D2DERR_RECREATE_TARGET` and invalidates the window, so the next `WM_PAINT` rebuilds the resources.
+- `WM_SIZE` passes the new pixel size to `Renderer::resize`.
+- Checked by screenshot after an external resize to 560×420: the sliders stretch and the status bar sits at the new bottom.
+- **Still to check by hand:** Win+Ctrl+Shift+B.
 
 **Done when:** after pressing **Win+Ctrl+Shift+B** (restarts the graphics driver), the window draws correctly again. Test on both machines.
 

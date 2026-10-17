@@ -1,6 +1,6 @@
 ﻿use crate::state::AppState;
 use windows::core::{Interface, Result, w};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::{
     ID2D1Factory,
@@ -31,6 +31,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
 
@@ -198,24 +199,30 @@ impl Renderer {
         Ok(())
     }
 
-    unsafe fn discard_resources(&mut self) {
+    /// Drops everything tied to the GPU device. Text formats are device-independent and kept.
+    unsafe fn discard_device_resources(&mut self) {
         self.render_target = None;
         self.brush_bg = None;
         self.brush_fg = None;
         self.brush_accent = None;
         self.brush_subdued = None;
-        self.text_format_title = None;
-        self.text_format_body = None;
-        self.text_format_label = None;
-        self.current_theme_is_dark = None;
         self.dpi = 0;
+    }
+
+    /// Resizes the drawing surface to the new client size in pixels (from `WM_SIZE`).
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if let Some(rt) = &self.render_target {
+            unsafe {
+                let _ = rt.Resize(&D2D_SIZE_U { width, height });
+            }
+        }
     }
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
             let is_dark = state.settings.is_dark_mode();
             if self.create_resources(hwnd, is_dark).is_err() {
-                self.discard_resources();
+                self.discard_device_resources();
                 self.create_resources(hwnd, is_dark)?;
             }
 
@@ -228,13 +235,6 @@ impl Renderer {
                 rt.SetDpi(dpi as f32, dpi as f32);
                 self.dpi = dpi;
             }
-
-            let mut rect = RECT::default();
-            GetClientRect(hwnd, &mut rect)?;
-            let _ = rt_hwnd.Resize(&D2D_SIZE_U {
-                width: (rect.right - rect.left) as u32,
-                height: (rect.bottom - rect.top) as u32,
-            });
 
             // GetSize reports DIPs, matching what input handling computes from pixels.
             let size = rt.GetSize();
@@ -420,7 +420,14 @@ impl Renderer {
                 );
             }
 
-            let _ = rt.EndDraw(None, None);
+            // The device was lost (driver reset, GPU switch, some remote sessions):
+            // rebuild the device resources and paint again.
+            if let Err(err) = rt.EndDraw(None, None)
+                && err.code() == D2DERR_RECREATE_TARGET
+            {
+                self.discard_device_resources();
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
             Ok(())
         }
     }

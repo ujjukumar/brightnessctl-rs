@@ -100,6 +100,7 @@ src/
 - Free physical monitor handles when a monitor is dropped (`DestroyPhysicalMonitors`). Dxva2 handles start at **0**, so a monitor's handle is `Option<HANDLE>`. Never use `HANDLE::is_invalid()` on them. Displays without a handle are kept, because WMI may still control them.
 - Hit-testing and rendering must use the **same** layout code: `layout::compute`.
 - **DPI:** all layout is in DIPs (96 per inch). The render target is created at `GetDpiForWindow` and follows DPI changes with `SetDpi`. Mouse coordinates are converted with `layout::px_to_dip` before hit-testing. `WM_DPICHANGED` applies the window rect Windows suggests. The default client area is 384×544 DIPs.
+- **Device loss:** if `EndDraw` returns `D2DERR_RECREATE_TARGET`, the renderer drops its device resources (render target and brushes, keeping the text formats) and invalidates the window, so they are rebuilt on the next paint. The render target is resized only from `WM_SIZE` (`Renderer::resize`), never per paint.
 
 ---
 
