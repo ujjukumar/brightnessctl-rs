@@ -285,7 +285,7 @@ impl Renderer {
                 );
                 
                 // Brightness percentage (right aligned)
-                let brightness_normalized = state.brightness.get(i).copied().unwrap_or(0.0);
+                let brightness_normalized = monitor.ui_value;
                 let is_editing = state.editing_monitor == Some(i);
                 let (pct_text, brush) = if is_editing {
                     (format!("{}|", state.edit_buffer), self.brush_accent.as_ref().unwrap())

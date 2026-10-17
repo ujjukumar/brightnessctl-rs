@@ -253,18 +253,32 @@ Tasks:
 
 Tasks:
 
-- [ ] Put hardware access behind a trait, e.g. `trait BrightnessBackend { fn read(&mut self) -> Option<u32>; fn write(&mut self, v: u32) -> bool; }`, so worker logic can be tested with a fake backend.
-- [ ] Implement the worker and the mailbox as described above.
-- [ ] Route **all** input paths through `request_brightness`.
-- [ ] Remove the rate limiter (`last_write_time`) and `set_brightness_forced`.
-- [ ] Keep brightness **only on `Monitor`** (`ui_value` + `confirmed_value`). Remove `AppState.brightness` and `Monitor.normalized_value`, which duplicate it. (This covers item 21.)
-- [ ] Remove `unsafe impl Send/Sync for Monitor` (`state.rs:66-67`). Use a small wrapper around just the physical monitor handle that is `Send`.
-- [ ] Shutdown and refresh: tell the threads to stop, join them, **then** call `DestroyPhysicalMonitors`.
-- [ ] Unit tests with a fake backend and a controllable clock:
+- [x] Put hardware access behind a trait, e.g. `trait BrightnessBackend { fn read(&mut self) -> Option<u32>; fn write(&mut self, v: u32) -> bool; }`, so worker logic can be tested with a fake backend.
+- [x] Implement the worker and the mailbox as described above.
+- [x] Route **all** input paths through `request_brightness`.
+- [x] Remove the rate limiter (`last_write_time`) and `set_brightness_forced`.
+- [x] Keep brightness **only on `Monitor`** (`ui_value` + `confirmed_value`). Remove `AppState.brightness` and `Monitor.normalized_value`, which duplicate it. (This covers item 21.)
+- [x] Remove `unsafe impl Send/Sync for Monitor` (`state.rs:66-67`). Use a small wrapper around just the physical monitor handle that is `Send`.
+- [x] Shutdown and refresh: tell the threads to stop, join them, **then** call `DestroyPhysicalMonitors`.
+- [x] Unit tests with a fake backend and a controllable clock:
   - ten fast requests → only the last is written,
   - the minimum gap is respected,
   - a read-back happens only once no new value is waiting,
   - failures are reported back.
+
+*Result:*
+- **Trait and implementations.** The trait has `read` / `write` / `verify`, with `HighLevel`, `Vcp` and `Wmi` implementations in `brightness.rs`. `Vcp` verifies the raw VCP value. `Wmi` counts an accepted write as confirmed, because the driver snaps writes to the panel's supported levels.
+- **Owned handles.** `PhysicalHandle` owns a Dxva2 handle and destroys it on drop. It moves into the worker through `BackendSpec`, so dropping a `Monitor` stops and joins its worker, which then frees the handle.
+- **`Backend` is plain data now** (`Wmi` has no payload). COM objects can't cross threads, so each WMI worker connects itself.
+- **`WriteResult.confirmed` is `Option<bool>`.** It's `None` for in-between writes, which weren't read back; those leave `write_confirmed` unchanged, so the label doesn't flicker during a drag.
+- **Stale results.** Results carry a worker generation, so results still queued from before a Refresh are ignored.
+- **Brightness fields.** Brightness now lives in `Monitor.ui_value`, `written_value` and `last_requested`; the last one makes requests idempotent. Also removed: `observed_min` / `observed_max`, which were recorded but never used.
+- **Item 23, done early:** failure counting is now `Monitor::apply_write_result`, and its tests call the real code. The fake `test_backoff_escalation` is gone.
+- **Tests and timing.**
+  - The worker tests are deterministic: the fake backend blocks until released, and they passed 30 out of 30 runs.
+  - The ignored hardware test `test_worker_rewrites_current_value_on_hardware` writes each monitor's current value back through a real worker. On the desktop it confirmed the write in 104–116 ms, the delay that used to block the window.
+- **Unchanged:** the 50 ms wheel input throttle. It limits input, not writes.
+- **Measured:** no CPU used while idle; release binary 266,240 bytes. The startup probe still runs before the window opens; that's item 9.
 
 **Done when:**
 - after fast scrolling, holding a hotkey, or dragging in sync mode, every monitor ends up at the value its slider shows,

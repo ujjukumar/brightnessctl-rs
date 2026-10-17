@@ -1,8 +1,12 @@
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Devices::Display::{DestroyPhysicalMonitors, PHYSICAL_MONITOR};
 use serde::{Serialize, Deserialize};
+use windows::Win32::Foundation::HWND;
+use crate::brightness::{self, PhysicalHandle};
 use crate::settings::{Settings, MonitorState};
-use std::time::Instant;
+use crate::worker::{WriteResult, Worker};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Consecutive failed writes after which a monitor is disabled until the next refresh.
+const MAX_FAILURES: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MonitorIdentity {
@@ -19,7 +23,7 @@ impl MonitorIdentity {
 }
 
 /// How a monitor's brightness is controlled. Chosen once by `brightness::probe_all`.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Backend {
     /// Not probed yet, or no API could read the monitor.
     Unsupported,
@@ -28,61 +32,119 @@ pub enum Backend {
     /// Raw DDC/CI VCP code 0x10, for monitors whose capabilities string lacks brightness.
     Vcp { max: u32 },
     /// WMI, for built-in laptop panels.
-    Wmi(crate::wmi::Panel),
+    Wmi,
 }
 
 #[derive(Debug)]
 pub struct Monitor {
-    /// Dxva2 physical monitor handle. Handles start at 0, so `None` (not a null
-    /// handle) marks a display without one.
-    pub physical: Option<HANDLE>,
+    /// Dxva2 handle. Moves into the worker thread once it starts.
+    pub physical: Option<PhysicalHandle>,
     pub hmonitor: isize,
     pub name: String,
     pub identity: Option<MonitorIdentity>,
+    pub device_path: String,
     pub backend: Backend,
-    pub normalized_value: f32,
+    pub hardware_min: u32,
+    pub hardware_max: u32,
+    /// Slider position, 0.0-1.0. Changes immediately on input.
+    pub ui_value: f32,
+    /// Last value (percent) the worker reported as written.
+    pub written_value: Option<u32>,
+    /// Last value (percent) sent to the worker, or known to be on the hardware.
+    pub last_requested: Option<u32>,
     pub last_set_by_app: bool,
     pub write_confirmed: bool,
     pub timestamp: u64,
-    pub device_path: String,
-    pub last_write_time: Option<Instant>,
     pub failure_count: u32,
     pub is_disabled: bool,
-    pub hardware_min: u32,
-    pub hardware_max: u32,
-    pub observed_min: u32,
-    pub observed_max: u32,
+    pub worker: Option<Worker>,
 }
 
 impl Monitor {
-    pub fn to_state(&self, brightness_value: u32) -> MonitorState {
-        MonitorState {
-            brightness_value,
-            normalized_value: self.normalized_value,
+    pub fn new(
+        physical: Option<PhysicalHandle>,
+        hmonitor: isize,
+        name: String,
+        identity: Option<MonitorIdentity>,
+        device_path: String,
+    ) -> Self {
+        Self {
+            physical,
+            hmonitor,
+            name,
+            identity,
+            device_path,
+            backend: Backend::Unsupported,
+            hardware_min: 0,
+            hardware_max: 100,
+            ui_value: 0.5,
+            written_value: None,
+            last_requested: None,
+            last_set_by_app: false,
+            write_confirmed: false,
+            timestamp: 0,
+            failure_count: 0,
+            is_disabled: false,
+            worker: None,
+        }
+    }
+
+    /// The slider value as a whole percentage.
+    pub fn percent(&self) -> u32 {
+        (self.ui_value.clamp(0.0, 1.0) * 100.0).round() as u32
+    }
+
+    /// Sends the slider value to the worker, unless it is the value last sent.
+    pub fn request_write(&mut self) {
+        let percent = self.percent();
+        if self.is_disabled || self.last_requested == Some(percent) {
+            return;
+        }
+        if let Some(worker) = &self.worker {
+            worker.request(percent);
+            self.last_requested = Some(percent);
+        }
+    }
+
+    /// Records a worker's result. Returns true if anything shown in the label changed.
+    pub fn apply_write_result(&mut self, result: WriteResult) -> bool {
+        let before = (self.write_confirmed, self.is_disabled);
+        if result.success {
+            self.failure_count = 0;
+            self.written_value = Some(result.value);
+            self.last_set_by_app = true;
+            self.timestamp = unix_timestamp();
+            if let Some(confirmed) = result.confirmed {
+                self.write_confirmed = confirmed;
+            }
+        } else {
+            self.failure_count += 1;
+            // Let the same value be requested again.
+            self.last_requested = None;
+            if self.failure_count >= MAX_FAILURES {
+                self.is_disabled = true;
+            }
+        }
+        before != (self.write_confirmed, self.is_disabled)
+    }
+
+    /// The state to persist, or `None` if the app never wrote this monitor.
+    pub fn to_state(&self) -> Option<MonitorState> {
+        let value = self.written_value?;
+        Some(MonitorState {
+            brightness_value: value,
+            normalized_value: value as f32 / 100.0,
             last_set_by_app: self.last_set_by_app,
             write_confirmed: self.write_confirmed,
             timestamp: self.timestamp,
             last_seen_device_path: self.device_path.clone(),
-        }
+        })
     }
 }
 
-impl Drop for Monitor {
-    fn drop(&mut self) {
-        if let Some(handle) = self.physical {
-            let pm = PHYSICAL_MONITOR {
-                hPhysicalMonitor: handle,
-                ..Default::default()
-            };
-            unsafe {
-                let _ = DestroyPhysicalMonitors(&[pm]);
-            }
-        }
-    }
+fn unix_timestamp() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
-
-unsafe impl Send for Monitor {}
-unsafe impl Sync for Monitor {}
 
 use std::collections::HashMap;
 use crate::actions::Action;
@@ -90,7 +152,6 @@ use crate::actions::Action;
 #[derive(Default)]
 pub struct AppState {
     pub monitors: Vec<Monitor>,
-    pub brightness: Vec<f32>, // Normalized 0.0 - 1.0
     pub settings: Settings,
     pub status_message: String,
     pub hover_monitor_idx: Option<usize>,
@@ -100,13 +161,34 @@ pub struct AppState {
     pub last_wheel_time: Option<Instant>,
     pub editing_monitor: Option<usize>,
     pub edit_buffer: String,
+    /// Bumped whenever workers are restarted, to ignore results from older ones.
+    pub worker_generation: u16,
 }
 
 impl AppState {
+    /// Starts a worker for every monitor with a usable backend, reporting to `hwnd`.
+    pub fn start_workers(&mut self, hwnd: HWND) {
+        self.worker_generation = self.worker_generation.wrapping_add(1);
+        let generation = self.worker_generation;
+        for (index, m) in self.monitors.iter_mut().enumerate() {
+            m.worker = brightness::worker_spec(m).and_then(|spec| Worker::spawn(spec, hwnd, generation, index));
+        }
+    }
+
+    /// Sends the slider value of each target monitor to its worker. Every input path
+    /// changes `ui_value` first and then calls this.
+    pub fn request_brightness(&mut self, indices: &[usize]) {
+        for &idx in indices {
+            if let Some(m) = self.monitors.get_mut(idx) {
+                m.request_write();
+            }
+        }
+    }
+
+    /// Moves every monitor by `delta`; each stops independently at 0.0 or 1.0.
     pub fn apply_sync_delta(&mut self, _dragged_idx: usize, delta: f32) {
-        for i in 0..self.brightness.len() {
-            let target_pct = (self.brightness[i] + delta).clamp(0.0, 1.0);
-            self.brightness[i] = target_pct;
+        for m in &mut self.monitors {
+            m.ui_value = (m.ui_value + delta).clamp(0.0, 1.0);
         }
     }
 
@@ -134,14 +216,8 @@ impl AppState {
 
     pub fn apply_step(&mut self, indices: &[usize], delta: f32) {
         for &idx in indices {
-            if idx < self.brightness.len() {
-                let old_val = self.brightness[idx];
-                let new_val = (old_val + delta).clamp(0.0, 1.0);
-                
-                // Idempotency check
-                if (new_val - old_val).abs() > 0.0001 {
-                    self.brightness[idx] = new_val;
-                }
+            if let Some(m) = self.monitors.get_mut(idx) {
+                m.ui_value = (m.ui_value + delta).clamp(0.0, 1.0);
             }
         }
     }
@@ -149,11 +225,8 @@ impl AppState {
     pub fn set_absolute(&mut self, indices: &[usize], value: f32) {
         let value = value.clamp(0.0, 1.0);
         for &idx in indices {
-            if idx < self.brightness.len() {
-                // Idempotency check
-                if (self.brightness[idx] - value).abs() > 0.0001 {
-                    self.brightness[idx] = value;
-                }
+            if let Some(m) = self.monitors.get_mut(idx) {
+                m.ui_value = value;
             }
         }
     }
@@ -163,26 +236,13 @@ impl AppState {
         if presets.is_empty() { return; }
 
         for &idx in indices {
-            if idx < self.brightness.len() {
-                let current = self.brightness[idx];
-                
-                // Find next preset strictly greater than current
-                let mut next_val = presets[0];
-                let mut found = false;
-                for &p in presets {
-                    if p > current + 0.001 {
-                        next_val = p;
-                        found = true;
-                        break;
-                    }
-                }
-                
-                // If none found, wrap to first
-                if !found {
-                    next_val = presets[0];
-                }
-
-                self.brightness[idx] = next_val;
+            if let Some(m) = self.monitors.get_mut(idx) {
+                // Next preset strictly greater than the current value, wrapping to the first.
+                m.ui_value = presets
+                    .iter()
+                    .copied()
+                    .find(|&p| p > m.ui_value + 0.001)
+                    .unwrap_or(presets[0]);
             }
         }
     }
@@ -191,98 +251,173 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::Mailbox;
+    use std::sync::Arc;
+
+    fn monitor(value: f32) -> Monitor {
+        let mut m = Monitor::new(None, 0, "Test".into(), None, String::new());
+        m.ui_value = value;
+        m
+    }
+
+    fn state_with(values: &[f32]) -> AppState {
+        AppState {
+            monitors: values.iter().map(|&v| monitor(v)).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn values(state: &AppState) -> Vec<f32> {
+        state.monitors.iter().map(|m| m.ui_value).collect()
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected) {
+            assert!((a - e).abs() < 0.001, "{actual:?} != {expected:?}");
+        }
+    }
 
     #[test]
     fn test_sync_delta_logic() {
-        let mut state = AppState::default();
-        state.brightness = vec![0.1, 0.5, 0.9];
-        
+        let mut state = state_with(&[0.1, 0.5, 0.9]);
+
         // +10%
         state.apply_sync_delta(0, 0.1);
-        assert!((state.brightness[0] - 0.2).abs() < 0.001);
-        assert!((state.brightness[1] - 0.6).abs() < 0.001);
-        assert!((state.brightness[2] - 1.0).abs() < 0.001);
+        assert_close(&values(&state), &[0.2, 0.6, 1.0]);
 
         // +10% more (Saturation test)
         state.apply_sync_delta(0, 0.1);
-        assert!((state.brightness[0] - 0.3).abs() < 0.001);
-        assert!((state.brightness[1] - 0.7).abs() < 0.001);
-        assert!((state.brightness[2] - 1.0).abs() < 0.001); // Stay at 1.0
+        assert_close(&values(&state), &[0.3, 0.7, 1.0]);
 
-        // -20% (Reverse movement test)
+        // -20% (Reverse movement test: moves on from 1.0, no catching up)
         state.apply_sync_delta(0, -0.2);
-        assert!((state.brightness[0] - 0.1).abs() < 0.001);
-        assert!((state.brightness[1] - 0.5).abs() < 0.001);
-        assert!((state.brightness[2] - 0.8).abs() < 0.001); // Move from 1.0
+        assert_close(&values(&state), &[0.1, 0.5, 0.8]);
     }
 
     #[test]
     fn test_step_arithmetic() {
-        let mut state = AppState::default();
-        state.brightness = vec![0.5];
-        
-        // Step up
-        state.apply_step(&[0], 0.1);
-        assert!((state.brightness[0] - 0.6).abs() < 0.001);
+        let mut state = state_with(&[0.5]);
 
-        // Step down
+        state.apply_step(&[0], 0.1);
+        assert_close(&values(&state), &[0.6]);
+
         state.apply_step(&[0], -0.2);
-        assert!((state.brightness[0] - 0.4).abs() < 0.001);
+        assert_close(&values(&state), &[0.4]);
 
         // Clamp upper
         state.apply_step(&[0], 0.7);
-        assert_eq!(state.brightness[0], 1.0);
+        assert_eq!(values(&state), vec![1.0]);
 
         // Clamp lower
         state.apply_step(&[0], -1.2);
-        assert_eq!(state.brightness[0], 0.0);
-        
-        // Idempotency
-        state.apply_step(&[0], 0.0);
-        assert_eq!(state.brightness[0], 0.0);
+        assert_eq!(values(&state), vec![0.0]);
+
+        // Out-of-range index is ignored
+        state.apply_step(&[5], 0.1);
+        assert_eq!(values(&state), vec![0.0]);
     }
 
     #[test]
     fn test_set_absolute() {
-        let mut state = AppState::default();
-        state.brightness = vec![0.5, 0.5];
+        let mut state = state_with(&[0.5, 0.5]);
 
         state.set_absolute(&[0], 0.8);
-        assert_eq!(state.brightness[0], 0.8);
-        assert_eq!(state.brightness[1], 0.5);
+        assert_eq!(values(&state), vec![0.8, 0.5]);
 
         // Clamp
         state.set_absolute(&[1], 1.5);
-        assert_eq!(state.brightness[1], 1.0);
+        assert_eq!(values(&state), vec![0.8, 1.0]);
 
         state.set_absolute(&[1], -0.5);
-        assert_eq!(state.brightness[1], 0.0);
+        assert_eq!(values(&state), vec![0.8, 0.0]);
     }
 
     #[test]
     fn test_preset_cycling() {
-        let mut state = AppState::default();
+        let mut state = state_with(&[0.0]);
         state.settings.presets = vec![0.0, 0.5, 1.0];
-        state.brightness = vec![0.0];
 
         state.cycle_presets(&[0]);
-        assert_eq!(state.brightness[0], 0.5);
+        assert_eq!(values(&state), vec![0.5]);
 
         state.cycle_presets(&[0]);
-        assert_eq!(state.brightness[0], 1.0);
+        assert_eq!(values(&state), vec![1.0]);
 
         state.cycle_presets(&[0]);
-        assert_eq!(state.brightness[0], 0.0); // Wrap
+        assert_eq!(values(&state), vec![0.0]); // Wrap
 
         // Intermediate value
-        state.brightness[0] = 0.3;
+        state.monitors[0].ui_value = 0.3;
         state.cycle_presets(&[0]);
-        assert_eq!(state.brightness[0], 0.5);
+        assert_eq!(values(&state), vec![0.5]);
 
         // Empty presets
         state.settings.presets = vec![];
-        state.brightness[0] = 0.7;
+        state.monitors[0].ui_value = 0.7;
         state.cycle_presets(&[0]);
-        assert_eq!(state.brightness[0], 0.7); // No-op
+        assert_eq!(values(&state), vec![0.7]); // No-op
+    }
+
+    #[test]
+    fn test_request_brightness_skips_unchanged_values() {
+        let mut state = state_with(&[0.42]);
+        let mailbox = Arc::new(Mailbox::default());
+        state.monitors[0].worker = Some(Worker::detached(Arc::clone(&mailbox)));
+
+        state.request_brightness(&[0]);
+        assert_eq!(mailbox.take_pending(), Some(42));
+
+        // Same value again: nothing is sent.
+        state.request_brightness(&[0]);
+        assert_eq!(mailbox.take_pending(), None);
+
+        state.set_absolute(&[0], 0.43);
+        state.request_brightness(&[0]);
+        assert_eq!(mailbox.take_pending(), Some(43));
+    }
+
+    #[test]
+    fn test_write_results_update_monitor() {
+        let mut m = monitor(0.5);
+        m.last_requested = Some(50);
+
+        // An in-between write isn't checked, so the confirmation flag is left alone.
+        assert!(!m.apply_write_result(WriteResult { value: 40, success: true, confirmed: None }));
+        assert_eq!(m.written_value, Some(40));
+        assert!(m.last_set_by_app);
+        assert!(!m.write_confirmed);
+
+        // The final write was read back: the label changes.
+        assert!(m.apply_write_result(WriteResult { value: 50, success: true, confirmed: Some(true) }));
+        assert!(m.write_confirmed);
+        assert_eq!(m.to_state().unwrap().brightness_value, 50);
+    }
+
+    #[test]
+    fn test_monitor_disabled_after_repeated_failures() {
+        let mut m = monitor(0.5);
+        let failure = WriteResult { value: 50, success: false, confirmed: None };
+
+        for _ in 0..MAX_FAILURES - 1 {
+            m.last_requested = Some(50);
+            m.apply_write_result(failure);
+            assert_eq!(m.last_requested, None, "a failed value can be retried");
+        }
+        assert!(!m.is_disabled);
+
+        assert!(m.apply_write_result(failure));
+        assert!(m.is_disabled);
+
+        // A success resets the count.
+        let mut m = monitor(0.5);
+        m.apply_write_result(failure);
+        m.apply_write_result(WriteResult { value: 50, success: true, confirmed: Some(true) });
+        assert_eq!(m.failure_count, 0);
+    }
+
+    #[test]
+    fn test_to_state_requires_a_write() {
+        assert!(monitor(0.5).to_state().is_none());
     }
 }

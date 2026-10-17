@@ -16,8 +16,9 @@ mod settings;
 mod menu;
 mod actions;
 mod hotkeys;
+mod worker;
 
-use crate::state::AppState;
+use crate::state::{AppState, Monitor};
 
 use windows::{
     core::*,
@@ -49,26 +50,21 @@ fn main() -> Result<()> {
         let (settings, config_warning) = Settings::load();
         let mut monitors = monitors::enumerate_monitors();
         let current = brightness::probe_all(&mut monitors);
-        let mut initial_brightness = Vec::new();
+        apply_probed_values(&mut monitors, current);
 
-        for (m, current) in monitors.iter_mut().zip(current) {
-            let mut value = current;
-
-            // Smart Restore: only reapply values this app set and confirmed.
+        // Smart Restore: only reapply values this app set and confirmed. They are
+        // written once the workers run.
+        let mut restore = Vec::new();
+        for (i, m) in monitors.iter_mut().enumerate() {
             let saved = m.identity.as_ref().and_then(|ident| settings.get_monitor_state(ident));
             if let Some(saved) = saved.filter(|s| brightness::should_restore(s)) {
-                let saved_value = saved.brightness_value;
-                if brightness::set_brightness(m, saved_value) {
-                    value = Some(saved_value);
-                }
+                m.ui_value = saved.brightness_value as f32 / 100.0;
+                restore.push(i);
             }
-
-            initial_brightness.push(value.map_or(0.5, |b| b as f32 / 100.0)); // 0.5 if unreadable
         }
 
         APP_STATE = Some(AppState {
             monitors,
-            brightness: initial_brightness,
             settings,
             status_message: config_warning.unwrap_or_else(|| "Ready".to_string()),
             hover_monitor_idx: None,
@@ -78,6 +74,7 @@ fn main() -> Result<()> {
             last_wheel_time: None,
             editing_monitor: None,
             edit_buffer: String::new(),
+            worker_generation: 0,
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -85,6 +82,12 @@ fn main() -> Result<()> {
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
         let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
+
+        // Workers report to the window, so they start once it exists.
+        if let Some(state) = APP_STATE.as_mut() {
+            state.start_workers(hwnd);
+            state.request_brightness(&restore);
+        }
 
         // Initialize hotkeys
         let mut hkm = hotkeys::HotkeyManager::new();
@@ -115,6 +118,14 @@ fn main() -> Result<()> {
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+
+/// Sets each slider to the value read from the hardware (0.5 if unreadable).
+fn apply_probed_values(monitors: &mut [Monitor], current: Vec<Option<u32>>) {
+    for (m, value) in monitors.iter_mut().zip(current) {
+        m.ui_value = value.map_or(0.5, |v| v as f32 / 100.0);
+        m.last_requested = value;
+    }
+}
 
 unsafe fn update_theme_menu(window: HWND, state: &AppState) {
     let hmenu = GetMenu(window);
@@ -155,11 +166,11 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     }
                     menu::IDM_REFRESH => {
                         if let Some(state) = APP_STATE.as_mut() {
+                            // Replacing the list drops the old monitors, which stops their workers.
                             state.monitors = monitors::enumerate_monitors();
-                            state.brightness = brightness::probe_all(&mut state.monitors)
-                                .into_iter()
-                                .map(|b| b.map_or(0.5, |b| b as f32 / 100.0))
-                                .collect();
+                            let current = brightness::probe_all(&mut state.monitors);
+                            apply_probed_values(&mut state.monitors, current);
+                            state.start_workers(window);
                             state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
                             let _ = InvalidateRect(Some(window), None, false);
                         }
@@ -278,31 +289,15 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                let dragged_idx = DRAGGING_MONITOR_IDX;
                 DRAGGING_MONITOR_IDX = None;
-                
+
                 if let Some(state) = APP_STATE.as_mut() {
                     state.active_monitor_idx = None;
-                    
-                    if let Some(idx) = dragged_idx {
-                        if state.lock_mode {
-                             for (i, m) in state.monitors.iter_mut().enumerate() {
-                                let val = state.brightness[i];
-                                brightness::set_brightness_forced(m, (val * 100.0).round() as u32);
-                            }
-                        } else {
-                             let val = state.brightness[idx];
-                             let m = &mut state.monitors[idx];
-                             brightness::set_brightness_forced(m, (val * 100.0).round() as u32);
-                        }
-                    }
 
                     // Persist monitor states
-                    for (i, m) in state.monitors.iter().enumerate() {
-                        if let Some(ident) = &m.identity {
-                            let val = state.brightness[i];
-                            let brightness_u32 = (val * 100.0).round() as u32;
-                            state.settings.set_monitor_state(ident, m.to_state(brightness_u32));
+                    for m in &state.monitors {
+                        if let (Some(ident), Some(saved)) = (&m.identity, m.to_state()) {
+                            state.settings.set_monitor_state(ident, saved);
                         }
                     }
                     let _ = state.settings.save();
@@ -310,6 +305,18 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 let _ = ReleaseCapture();
+                LRESULT(0)
+            }
+            worker::WM_APP_WRITE_DONE => {
+                if let Some(state) = APP_STATE.as_mut() {
+                    let (generation, idx) = worker::unpack_target(wparam.0);
+                    if generation == state.worker_generation
+                        && let Some(m) = state.monitors.get_mut(idx)
+                        && m.apply_write_result(worker::WriteResult::from_lparam(lparam.0))
+                    {
+                        let _ = InvalidateRect(Some(window), None, false);
+                    }
+                }
                 LRESULT(0)
             }
             WM_DESTROY => {
@@ -326,15 +333,9 @@ unsafe fn handle_keydown(window: HWND, vk: u16) {
         if let Some(idx) = state.editing_monitor {
             match vk {
                 0x0D => { // VK_RETURN
-                    let val_str = state.edit_buffer.clone();
-                    if let Ok(val_u32) = val_str.parse::<u32>() {
-                        let normalized = (val_u32 as f32 / 100.0).clamp(0.0, 1.0);
-                        state.set_absolute(&[idx], normalized);
-                        
-                        // Hardware update
-                        if let Some(m) = state.monitors.get_mut(idx) {
-                            brightness::set_brightness_forced(m, (normalized * 100.0).round() as u32);
-                        }
+                    if let Ok(val_u32) = state.edit_buffer.parse::<u32>() {
+                        state.set_absolute(&[idx], (val_u32 as f32 / 100.0).clamp(0.0, 1.0));
+                        state.request_brightness(&[idx]);
                     }
                     state.editing_monitor = None;
                     let _ = InvalidateRect(Some(window), None, false);
@@ -390,14 +391,7 @@ unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
             };
 
             state.apply_step(&targets, change);
-
-            // Update hardware
-            for &idx in &targets {
-                if let Some(m) = state.monitors.get_mut(idx) {
-                    let val = state.brightness[idx];
-                    brightness::set_brightness(m, (val * 100.0).round() as u32);
-                }
-            }
+            state.request_brightness(&targets);
 
             let _ = InvalidateRect(Some(window), None, false);
         }
@@ -434,14 +428,7 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
                     state.cycle_presets(&targets);
                 }
             }
-
-            // Update hardware for all affected targets
-            for &idx in &targets {
-                if let Some(m) = state.monitors.get_mut(idx) {
-                    let val = state.brightness[idx];
-                    brightness::set_brightness(m, (val * 100.0).round() as u32);
-                }
-            }
+            state.request_brightness(&targets);
 
             state.status_message = format!("Hotkey: {:?}", action);
             let _ = InvalidateRect(Some(window), None, false);
@@ -479,7 +466,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
             match hit {
                 Some(Hit::Value(idx)) => {
                     state.editing_monitor = Some(idx);
-                    state.edit_buffer = format!("{}", (state.brightness[idx] * 100.0).round() as u32);
+                    state.edit_buffer = state.monitors.get(idx).map_or_else(String::new, |m| m.percent().to_string());
                 }
                 Some(Hit::Track(idx)) => {
                     state.editing_monitor = None; // Stop editing if clicking elsewhere
@@ -493,27 +480,22 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
 
         // Processing movement/drag
         if let Some(idx) = DRAGGING_MONITOR_IDX {
-            let Some(row) = layout.rows.get(idx) else { return };
-            let new_pct = layout::value_at(&row.track, x);
-            let old_pct = state.brightness[idx];
-            let delta = new_pct - old_pct;
+            let (Some(row), Some(old_value)) = (layout.rows.get(idx), state.monitors.get(idx).map(|m| m.ui_value)) else {
+                return;
+            };
+            let new_value = layout::value_at(&row.track, x);
+            let delta = new_value - old_value;
 
             if delta.abs() > 0.001 {
-                if state.lock_mode {
+                let targets: Vec<usize> = if state.lock_mode {
                     state.apply_sync_delta(idx, delta);
-                    // Hardware update for all
-                    for (i, m) in state.monitors.iter_mut().enumerate() {
-                        let val = state.brightness[i];
-                        brightness::set_brightness(m, (val * 100.0).round() as u32);
-                    }
+                    (0..state.monitors.len()).collect()
                 } else {
-                    if (state.brightness[idx] - new_pct).abs() > 0.001 {
-                        state.brightness[idx] = new_pct;
-                        let m = &mut state.monitors[idx];
-                        brightness::set_brightness(m, (new_pct * 100.0).round() as u32);
-                    }
-                }
-                
+                    state.set_absolute(&[idx], new_value);
+                    vec![idx]
+                };
+                state.request_brightness(&targets);
+
                 // Repaint
                 let _ = InvalidateRect(Some(window), None, false);
             }

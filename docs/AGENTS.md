@@ -37,7 +37,7 @@ A native, professional Windows brightness controller for power users and multi-m
 
 - **No polling.** Redraw only on `WM_PAINT`, input, or a real state change.
 - **Timers:** only **one-shot** timers that kill themselves (debounced save, delayed display-change refresh). Never periodic.
-- **Threads:** allowed **only for monitor I/O**, with one worker thread per monitor *(→ fix plan #6)*:
+- **Threads:** allowed **only for monitor I/O**, with one worker thread per monitor (`worker.rs`):
   - workers talk to the window thread only through `PostMessageW`,
   - they never touch UI or app state,
   - the window thread never blocks on monitor I/O.
@@ -78,22 +78,21 @@ src/
 ├─ state.rs       Monitor, MonitorIdentity, AppState; step/preset/sync math
 ├─ monitors.rs    Monitor enumeration, device ID and EDID lookup (SetupDi + registry)
 ├─ edid.rs        EDID parsing into a MonitorIdentity
-├─ brightness.rs  Backend probing (high-level → VCP 0x10 → WMI), writes, failure counting
+├─ brightness.rs  Backend probing (high-level → VCP 0x10 → WMI), BrightnessBackend impls, PhysicalHandle
+├─ worker.rs      One I/O thread per monitor: latest-value mailbox, write spacing, WM_APP_WRITE_DONE
 ├─ wmi.rs         WMI backend for built-in panels (root\WMI)
 ├─ settings.rs    brightnessctl.json load/save, system theme detection
 ├─ hotkeys.rs     RegisterHotKey / UnregisterHotKey wrapper
 └─ actions.rs     Action enum (hotkey IDs)
 ```
 
-Planned new modules (fix plan):
-- `worker.rs`: per-monitor I/O threads (#6).
-
 ### Data flow
 
-1. **Startup:** set up COM and DPI → load settings → find monitors → read or restore brightness → create the window → register hotkeys → message loop. *(Fix plan #9 changes this to "show window first, detect monitors after".)*
-2. **Input** (mouse, wheel, keyboard, hotkeys, menu) **changes state** and asks for hardware writes **explicitly**.
-3. **Rendering only reads state.** It never changes anything.
-4. **Brightness is normalized to 0.0–1.0 internally.** A percentage (0–100) is used only for display and at the hardware boundary.
+1. **Startup:** set up COM and DPI → load settings → find monitors → probe each backend and read brightness → create the window → start one worker per monitor → request Smart Restore values → register hotkeys → message loop. *(Fix plan #9 changes this to "show window first, detect monitors after".)*
+2. **Input** (mouse, wheel, keyboard, hotkeys, menu) changes `Monitor.ui_value`, then calls `AppState::request_brightness(targets)`. That posts the value to each target's worker, unless it is the value last sent.
+3. **Workers** write the newest value, keep `worker::MIN_WRITE_GAP` (50 ms) between writes, and read back the value that ends a burst. Each result goes back to the window as `WM_APP_WRITE_DONE` (`Monitor::apply_write_result`).
+4. **Rendering only reads state.** It never changes anything.
+5. **Brightness is normalized to 0.0–1.0 internally.** A percentage (0–100) is used only for display and at the hardware boundary.
 
 ### Rules
 
@@ -201,15 +200,16 @@ The backend is chosen **once per monitor** by `brightness::probe_all` (stored as
 - Treat the hardware min/max as advisory.
 
 **Reliability:**
-- Read back after the final write to confirm it (`write_confirmed`).
-- Disable a monitor after **10 consecutive failures**. Refresh Monitors re-enables it.
-- Don't flood the DDC/CI bus. Writes are coalesced (newest value wins) with a minimum gap of about 50 ms *(→ fix plan #6; currently a lossy 100 ms limiter)*.
+- After the write that ends a burst, the worker reads the value back (`BrightnessBackend::verify`) to set `write_confirmed`. In-between writes aren't read back, and they leave the flag unchanged.
+- Disable a monitor after **10 consecutive failures** (`Monitor::apply_write_result`). Refresh Monitors re-enables it.
+- Don't flood the DDC/CI bus. Each worker keeps only the newest requested value and leaves at least `MIN_WRITE_GAP` (50 ms) between writes. Values in between are skipped; the final one is never lost.
+- **Ownership:** a monitor's `PhysicalHandle` moves into its worker. Dropping a `Monitor` stops and joins the worker, which then destroys the handle. Results carry a worker generation, so results from before a Refresh are ignored.
 
 **Smart Restore:** on startup, restore the saved value **only if** `last_set_by_app && write_confirmed`. Otherwise use the monitor's current value. Never overwrite a value the user changed outside the app.
 
 ### 5.3 Input
 
-**All input paths go through one write function** and are idempotent: if the value didn't change, nothing is written.
+**All input paths go through one write function**, `AppState::request_brightness`, and are idempotent: if the value didn't change, nothing is written.
 
 **Mouse drag:**
 - Click the track to jump to that value; drag to adjust.

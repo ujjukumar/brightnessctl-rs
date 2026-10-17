@@ -1,4 +1,5 @@
-use crate::state::{Backend, Monitor};
+use crate::brightness::PhysicalHandle;
+use crate::state::Monitor;
 use windows::core::{BOOL, PCWSTR, GUID};
 use windows::Win32::Foundation::{HANDLE, LPARAM, RECT, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
@@ -242,25 +243,7 @@ extern "system" fn monitor_enum_proc(hmonitor: HMONITOR, _hdc: HDC, _rect: *mut 
 
 fn new_monitor(physical: Option<HANDLE>, hmonitor: HMONITOR, name: String, device_path: String) -> Monitor {
     let identity = get_edid_blob(&device_path).and_then(|blob| crate::edid::parse_identity(&blob));
-    Monitor {
-        physical,
-        hmonitor: hmonitor.0 as isize,
-        name,
-        identity,
-        backend: Backend::Unsupported,
-        normalized_value: 0.0,
-        last_set_by_app: false,
-        write_confirmed: false,
-        timestamp: 0,
-        device_path,
-        last_write_time: None,
-        failure_count: 0,
-        is_disabled: false,
-        hardware_min: 0,
-        hardware_max: 100,
-        observed_min: 0,
-        observed_max: 100,
-    }
+    Monitor::new(physical.map(PhysicalHandle::new), hmonitor.0 as isize, name, identity, device_path)
 }
 
 #[cfg(test)]
@@ -317,7 +300,7 @@ mod tests {
         let monitors = enumerate_monitors();
         assert!(!monitors.is_empty());
         for m in &monitors {
-            println!("{} | {:?} | {} | {:?}", m.name, m.physical, m.device_path, m.identity.as_ref().map(|i| i.composite_key()));
+            println!("{} | {:?} | {} | {:?}", m.name, m.physical.as_ref().map(|h| h.raw()), m.device_path, m.identity.as_ref().map(|i| i.composite_key()));
             assert!(!m.device_path.is_empty(), "no device path for {}", m.name);
             assert!(m.identity.is_some(), "no identity for {} ({})", m.name, m.device_path);
         }
