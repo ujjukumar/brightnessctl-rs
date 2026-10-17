@@ -270,7 +270,10 @@ The backend is chosen **once per monitor** by `brightness::probe_all` (stored as
   - `write_confirmed`,
   - `timestamp` (Unix seconds),
   - `last_seen_device_path`.
-- Save the value **confirmed by the hardware**, debounced to about 1 s after the last change, and also save on close or Windows shutdown *(→ fix plan #7; currently saved on every mouse release)*.
+- Save the value **written to the hardware** (`Monitor::written_value`), not the slider's value.
+  - Successful write results mark settings dirty, and a one-shot timer (`SAVE_TIMER_ID`, 1 s, re-armed on every result) saves once writes settle.
+  - Anything unsaved is also saved on `WM_CLOSE` and `WM_ENDSESSION`.
+  - Monitors the app never wrote are not saved, so their earlier saved state survives.
 
 ### 5.6 Refresh
 

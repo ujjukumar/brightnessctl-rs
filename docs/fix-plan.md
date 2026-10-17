@@ -288,11 +288,19 @@ Tasks:
 
 **Problem:** settings are saved only in `WM_LBUTTONUP` (`main.rs:272-306`), and on **every** mouse release, even clicks on empty space. Changes from hotkeys, the wheel and typed values are never saved. It also saves the slider's value instead of the value confirmed by the monitor.
 
-- [ ] When a `WM_APP_WRITE_DONE` message for a successful write arrives, mark settings as dirty and restart a **one-shot timer of about 1 s**. When it fires, save and kill the timer.
-- [ ] If anything is unsaved, save it on `WM_CLOSE` and `WM_ENDSESSION`.
-- [ ] Save `confirmed_value` (the value that was actually written), not the slider's value.
-- [ ] Remove the save from `WM_LBUTTONUP`.
-- [ ] Tests: the dirty flag is set and cleared correctly, and a click with no brightness change doesn't mark anything dirty.
+- [x] When a `WM_APP_WRITE_DONE` message for a successful write arrives, mark settings as dirty and restart a **one-shot timer of about 1 s**. When it fires, save and kill the timer.
+- [x] If anything is unsaved, save it on `WM_CLOSE` and `WM_ENDSESSION`.
+- [x] Save `confirmed_value` (the value that was actually written), not the slider's value.
+- [x] Remove the save from `WM_LBUTTONUP`.
+- [x] Tests: the dirty flag is set and cleared correctly, and a click with no brightness change doesn't mark anything dirty.
+
+*Result:*
+- **Write results.** `AppState::handle_write_result` applies a worker result: it ignores stale generations, and it marks settings dirty only for a successful write to an identified monitor.
+- **Saving.** `persist_monitor_states` copies `Monitor::to_state()` (built from `written_value`) into the settings. A monitor the app never wrote is never saved, so its saved state from an earlier session isn't overwritten.
+- **Timer.** `SetTimer(SAVE_TIMER_ID, 1000)` is re-armed on every result, so a burst of writes saves once.
+- **Checked by hand,** by posting fake results to a temporary copy of the app:
+  - not saved after 0.3 s, saved by 1.5 s,
+  - a result posted 100 ms before closing was saved by `WM_CLOSE`.
 
 ---
 

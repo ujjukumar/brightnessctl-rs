@@ -75,6 +75,7 @@ fn main() -> Result<()> {
             editing_monitor: None,
             edit_buffer: String::new(),
             worker_generation: 0,
+            settings_dirty: false,
         });
 
         RENDERER = Some(render::Renderer::new()?);
@@ -118,6 +119,20 @@ fn main() -> Result<()> {
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+
+/// One-shot timer that saves settings once writes have settled.
+const SAVE_TIMER_ID: usize = 1;
+const SAVE_DELAY_MS: u32 = 1000;
+
+/// Saves monitor states if a write changed them since the last save.
+unsafe fn save_if_dirty() {
+    if let Some(state) = APP_STATE.as_mut()
+        && state.settings_dirty
+    {
+        state.persist_monitor_states();
+        let _ = state.settings.save();
+    }
+}
 
 /// Sets each slider to the value read from the hardware (0.5 if unreadable).
 fn apply_probed_values(monitors: &mut [Monitor], current: Vec<Option<u32>>) {
@@ -293,15 +308,6 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
 
                 if let Some(state) = APP_STATE.as_mut() {
                     state.active_monitor_idx = None;
-
-                    // Persist monitor states
-                    for m in &state.monitors {
-                        if let (Some(ident), Some(saved)) = (&m.identity, m.to_state()) {
-                            state.settings.set_monitor_state(ident, saved);
-                        }
-                    }
-                    let _ = state.settings.save();
-
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 let _ = ReleaseCapture();
@@ -310,12 +316,29 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             worker::WM_APP_WRITE_DONE => {
                 if let Some(state) = APP_STATE.as_mut() {
                     let (generation, idx) = worker::unpack_target(wparam.0);
-                    if generation == state.worker_generation
-                        && let Some(m) = state.monitors.get_mut(idx)
-                        && m.apply_write_result(worker::WriteResult::from_lparam(lparam.0))
-                    {
+                    let result = worker::WriteResult::from_lparam(lparam.0);
+                    if state.handle_write_result(generation, idx, result) {
                         let _ = InvalidateRect(Some(window), None, false);
                     }
+                    if state.settings_dirty {
+                        // Re-arming replaces the pending timer, so a burst of writes saves once.
+                        SetTimer(Some(window), SAVE_TIMER_ID, SAVE_DELAY_MS, None);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == SAVE_TIMER_ID => {
+                let _ = KillTimer(Some(window), SAVE_TIMER_ID);
+                save_if_dirty();
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                save_if_dirty();
+                DefWindowProcW(window, message, wparam, lparam)
+            }
+            WM_ENDSESSION => {
+                if wparam.0 != 0 {
+                    save_if_dirty();
                 }
                 LRESULT(0)
             }

@@ -163,9 +163,38 @@ pub struct AppState {
     pub edit_buffer: String,
     /// Bumped whenever workers are restarted, to ignore results from older ones.
     pub worker_generation: u16,
+    /// A monitor the app wrote has state not yet saved to the config file.
+    pub settings_dirty: bool,
 }
 
 impl AppState {
+    /// Applies a result from the worker of monitor `idx`. Results from an older worker
+    /// generation are ignored. Returns true if the monitor's label changed.
+    pub fn handle_write_result(&mut self, generation: u16, idx: usize, result: WriteResult) -> bool {
+        if generation != self.worker_generation {
+            return false;
+        }
+        let Some(m) = self.monitors.get_mut(idx) else {
+            return false;
+        };
+        let label_changed = m.apply_write_result(result);
+        if result.success && m.identity.is_some() {
+            self.settings_dirty = true;
+        }
+        label_changed
+    }
+
+    /// Copies the state of every monitor the app wrote into the settings and clears the
+    /// dirty flag. The caller saves the settings.
+    pub fn persist_monitor_states(&mut self) {
+        for m in &self.monitors {
+            if let (Some(ident), Some(saved)) = (&m.identity, m.to_state()) {
+                self.settings.set_monitor_state(ident, saved);
+            }
+        }
+        self.settings_dirty = false;
+    }
+
     /// Starts a worker for every monitor with a usable backend, reporting to `hwnd`.
     pub fn start_workers(&mut self, hwnd: HWND) {
         self.worker_generation = self.worker_generation.wrapping_add(1);
@@ -419,5 +448,68 @@ mod tests {
     #[test]
     fn test_to_state_requires_a_write() {
         assert!(monitor(0.5).to_state().is_none());
+    }
+
+    fn identified(value: f32) -> Monitor {
+        let mut m = monitor(value);
+        m.identity = Some(MonitorIdentity {
+            manufacturer_id: "GBT".into(),
+            product_code: 9218,
+            serial: "22350B003157".into(),
+            is_fallback: false,
+        });
+        m
+    }
+
+    #[test]
+    fn test_successful_write_marks_settings_dirty() {
+        let mut state = AppState {
+            monitors: vec![identified(0.4), monitor(0.6)],
+            worker_generation: 3,
+            ..Default::default()
+        };
+        let ok = |value| WriteResult { value, success: true, confirmed: Some(true) };
+
+        // A failure, a stale generation, or a monitor without identity: nothing to save.
+        state.handle_write_result(3, 0, WriteResult { value: 40, success: false, confirmed: None });
+        state.handle_write_result(2, 0, ok(40));
+        state.handle_write_result(3, 1, ok(60));
+        state.handle_write_result(3, 7, ok(60));
+        assert!(!state.settings_dirty);
+        assert_eq!(state.monitors[0].written_value, None, "stale result ignored");
+
+        state.handle_write_result(3, 0, ok(40));
+        assert!(state.settings_dirty);
+    }
+
+    #[test]
+    fn test_persist_saves_written_value_and_clears_dirty() {
+        let mut state = AppState {
+            monitors: vec![identified(0.4)],
+            ..Default::default()
+        };
+        state.handle_write_result(0, 0, WriteResult { value: 40, success: true, confirmed: Some(true) });
+        // The slider has already moved on; the saved value is what the hardware got.
+        state.monitors[0].ui_value = 0.9;
+
+        state.persist_monitor_states();
+        assert!(!state.settings_dirty);
+        let ident = state.monitors[0].identity.clone().unwrap();
+        let saved = state.settings.get_monitor_state(&ident).unwrap();
+        assert_eq!(saved.brightness_value, 40);
+        assert!(saved.last_set_by_app && saved.write_confirmed);
+    }
+
+    #[test]
+    fn test_unchanged_request_leaves_settings_clean() {
+        let mut state = AppState {
+            monitors: vec![identified(0.5)],
+            ..Default::default()
+        };
+        state.monitors[0].last_requested = Some(50);
+        state.request_brightness(&[0]);
+        assert!(!state.settings_dirty);
+        state.persist_monitor_states();
+        assert!(state.settings.monitor_states.is_empty(), "a monitor the app never wrote isn't saved");
     }
 }
