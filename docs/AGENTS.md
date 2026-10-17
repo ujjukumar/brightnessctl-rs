@@ -171,9 +171,15 @@ Shown when hovering over a row: name, hardware range, device path, and EDID manu
   - `MFG` is the 3-letter EDID manufacturer ID.
   - `product_code` is a u16, little-endian.
   - `serial` is the EDID serial-number **string** (descriptor tag `0xFF`) if present, otherwise the numeric serial.
-- **Fallback:** if there's no serial (or it is 0), use a hash of the full EDID and set `is_fallback = true`. The hash must give the same result across Rust versions *(→ fix plan #1: FNV-1a)*.
+- **Fallback:** if there's no serial (or it is 0), use a 64-bit FNV-1a hash of the 128-byte base EDID block and set `is_fallback = true`. Keys are persisted, so the hash must never change (that's why `DefaultHasher` isn't used).
 - **No EDID:** the monitor is unidentified. Nothing is saved for it.
-- **Getting the EDID:** `EnumDisplayDevicesW(EDD_GET_DEVICE_INTERFACE_NAME)` → convert to the device instance ID → find the matching SetupDi device in the monitor class → registry value `EDID`. *(The current code uses flags `0`, which never matches → fix plan #1.)*
+- **Getting the EDID:**
+  1. `EnumDisplayDevicesW(adapter, i, EDD_GET_DEVICE_INTERFACE_NAME)`, keeping only active devices,
+  2. convert the interface path to the device instance ID (`interface_path_to_instance_id`),
+  3. find the matching SetupDi device in the monitor class (comparison ignores case),
+  4. read the registry value `EDID`.
+
+  With cloned displays, physical monitor *i* of an `HMONITOR` is paired with display device *i*.
 
 ### 5.2 Brightness control
 

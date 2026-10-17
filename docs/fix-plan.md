@@ -101,12 +101,14 @@ They never match, so `Monitor.identity` is always `None`. As a result:
 
 Strip the leading `\\?\`, drop the trailing `#{guid}`, and replace `#` with `\`. That gives `DISPLAY\GBT2402\5&145fde2&5&UID24837`, which matches the SetupDi ID **when compared ignoring case**.
 
-- [ ] Add a pure helper `interface_path_to_instance_id(&str) -> Option<String>`, with unit tests that use the real strings above.
-- [ ] Use `EDD_GET_DEVICE_INTERFACE_NAME` and the helper. Keep the comparison case-insensitive.
-- [ ] Look up the device ID **once** per `HMONITOR`. Today `monitor_enum_proc` calls it twice (`monitors.rs:166-167`).
-- [ ] Handle duplicated (cloned) displays, where one `HMONITOR` has several physical monitors: pair physical monitor *i* with `EnumDisplayDevicesW(adapter, i, …)`.
-- [ ] Store the instance ID in `Monitor.device_path`. Item 4 uses it to find WMI instances.
-- [ ] **Stable hash.** This was minor item 16, moved here so no unstable keys are ever saved. In `edid.rs:66-69`, replace `DefaultHasher` (its algorithm isn't guaranteed to stay the same between Rust versions) with a small inline FNV-1a 64-bit hash. Keep `test_fallback_hash_determinism` and add a test that pins a known hash value. No migration is needed: because of this bug, no identities were ever saved.
+- [x] Add a pure helper `interface_path_to_instance_id(&str) -> Option<String>`, with unit tests that use the real strings above.
+- [x] Use `EDD_GET_DEVICE_INTERFACE_NAME` and the helper. Keep the comparison case-insensitive.
+- [x] Look up the device ID **once** per `HMONITOR`. Today `monitor_enum_proc` calls it twice (`monitors.rs:166-167`).
+- [x] Handle duplicated (cloned) displays, where one `HMONITOR` has several physical monitors: pair physical monitor *i* with `EnumDisplayDevicesW(adapter, i, …)`.
+- [x] Store the instance ID in `Monitor.device_path`. Item 4 uses it to find WMI instances.
+- [x] **Stable hash.** This was minor item 16, moved here so no unstable keys are ever saved. In `edid.rs:66-69`, replace `DefaultHasher` (its algorithm isn't guaranteed to stay the same between Rust versions) with a small inline FNV-1a 64-bit hash. Keep `test_fallback_hash_determinism` and add a test that pins a known hash value. No migration is needed: because of this bug, no identities were ever saved.
+
+*Result:* the hardware test `cargo test test_enumerated_monitors_have_identity -- --ignored --nocapture` finds `GBT:9218:22350B003157` and `ACR:2966:1329143D03W01` on the desktop. Only active display devices are used. The fallback hash covers the 128-byte base EDID block only.
 
 **Done when:**
 - after one drag, `brightnessctl.json` has entries under `monitor_states`,
