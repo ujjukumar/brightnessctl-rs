@@ -257,7 +257,7 @@ impl Renderer {
                     "High-level"
                 };
 
-                let label_text = format!("{} â€¢ {}", display_name, ddc_status);
+                let label_text = format!("{} \u{2022} {}", display_name, ddc_status);
                 let name: Vec<u16> = label_text.encode_utf16().collect();
                 
                 rt.DrawText(

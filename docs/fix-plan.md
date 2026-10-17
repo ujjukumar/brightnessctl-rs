@@ -119,8 +119,8 @@ Strip the leading `\\?\`, drop the trailing `#{guid}`, and replace `#` with `\`.
 
 **Problem (confirmed):** the source contains the bytes `C3 A2 E2 82 AC C2 A2`, which is "•" encoded as UTF-8 twice. It renders as `â€¢`.
 
-- [ ] Replace it with `\u{2022}`.
-- [ ] Search `src/` for any other non-ASCII mis-encoding.
+- [x] Replace it with `\u{2022}`.
+- [x] Search `src/` for any other non-ASCII mis-encoding. (None found; `src/` is now pure ASCII.)
 
 ---
 
