@@ -98,6 +98,22 @@ impl Monitor {
         self.ready && self.backend != Backend::Unsupported && !self.is_disabled
     }
 
+    /// How the monitor is controlled, as shown next to its name.
+    pub fn status_label(&self) -> &'static str {
+        if !self.ready {
+            return "Detecting\u{2026}";
+        }
+        if self.is_disabled {
+            return "Disabled";
+        }
+        match self.backend {
+            Backend::HighLevel => "DDC/CI",
+            Backend::Vcp { .. } => "DDC/CI (VCP)",
+            Backend::Wmi => "WMI",
+            Backend::Unsupported => "Unsupported",
+        }
+    }
+
     /// The slider value as a whole percentage.
     pub fn percent(&self) -> u32 {
         (self.ui_value.clamp(0.0, 1.0) * 100.0).round() as u32
@@ -706,6 +722,30 @@ mod tests {
         assert!(!state.monitors[0].accepts_input());
         state.apply_step(&[0], 0.1);
         assert_eq!(values(&state), vec![0.5]);
+    }
+
+    #[test]
+    fn test_status_label() {
+        let with_backend = |backend| {
+            let mut m = monitor(0.5);
+            m.backend = backend;
+            m.status_label()
+        };
+        assert_eq!(with_backend(Backend::HighLevel), "DDC/CI");
+        assert_eq!(with_backend(Backend::Vcp { max: 255 }), "DDC/CI (VCP)");
+        assert_eq!(with_backend(Backend::Wmi), "WMI");
+        assert_eq!(with_backend(Backend::Unsupported), "Unsupported");
+
+        // A confirmed write doesn't change how the monitor is controlled.
+        let mut m = monitor(0.5);
+        m.write_confirmed = true;
+        assert_eq!(m.status_label(), "DDC/CI");
+
+        m.is_disabled = true;
+        assert_eq!(m.status_label(), "Disabled");
+
+        m.ready = false;
+        assert_eq!(m.status_label(), "Detecting\u{2026}", "detecting wins over everything");
     }
 
     #[test]

@@ -264,17 +264,7 @@ impl Renderer {
                     monitor.name.clone()
                 };
 
-                let ddc_status = if !monitor.ready {
-                    "Detecting\u{2026}"
-                } else if monitor.is_disabled {
-                    "Disabled"
-                } else if monitor.write_confirmed {
-                    "DDC Active"
-                } else {
-                    "High-level"
-                };
-
-                let label_text = format!("{} \u{2022} {}", display_name, ddc_status);
+                let label_text = format!("{} \u{2022} {}", display_name, monitor.status_label());
                 let name: Vec<u16> = label_text.encode_utf16().collect();
                 
                 rt.DrawText(

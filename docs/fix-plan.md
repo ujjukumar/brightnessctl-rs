@@ -388,7 +388,7 @@ Tasks:
 
 **Problem:** the label says "DDC Active" when `write_confirmed` is true (`render.rs:252-258`). That is also true for the high-level API, and before any write every monitor shows "High-level".
 
-- [ ] Build the label from `Backend` and the monitor's state, with a unit test:
+- [x] Build the label from `Backend` and the monitor's state, with a unit test:
 
   | Monitor state | Label |
   |---|---|
@@ -398,6 +398,8 @@ Tasks:
   | `Unsupported` | `Unsupported` |
   | disabled | `Disabled` |
   | not ready yet | `Detecting…` |
+
+*Result:* `Monitor::status_label()`, used by the renderer. The precedence is not ready, then disabled, then backend. Checked by screenshot: both desktop monitors show `DDC/CI`, including after a confirmed write (which used to flip the label to "DDC Active").
 
 ---
 

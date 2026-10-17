@@ -145,6 +145,18 @@ Segoe UI only:
 - Subtle hover and active feedback (lighter track, bigger thumb).
 - Percentage aligned right, above the track.
 
+### Monitor labels
+Each row's label reads `<name> • <status>`. The name is the EDID manufacturer and serial (or the Windows description if there's no EDID). The status comes from `Monitor::status_label`:
+
+| Monitor state | Status |
+|---|---|
+| not probed yet | `Detecting…` |
+| 10 failed writes | `Disabled` |
+| `HighLevel` backend | `DDC/CI` |
+| `Vcp` backend | `DDC/CI (VCP)` |
+| `Wmi` backend | `WMI` |
+| nothing can control it | `Unsupported` |
+
 ### Themes
 `Auto` (follows the Windows `AppsUseLightTheme` setting), `Light`, `Dark`. Changes apply immediately.
 
