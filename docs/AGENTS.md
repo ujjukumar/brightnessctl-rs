@@ -281,7 +281,7 @@ The backend is chosen **once per monitor** by `brightness::probe_all` (stored as
 
 ## 6. Configuration: `brightnessctl.json`
 
-Stored **next to the EXE**. It's created with defaults on first run. *(Currently the working directory is used → fix plan #5.)*
+Stored **next to the EXE** (`Settings::default_path`), whatever the working directory. It's created with defaults on first run. Saves are atomic: the app writes `brightnessctl.json.tmp`, then renames it over the real file.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -291,13 +291,17 @@ Stored **next to the EXE**. It's created with defaults on first run. *(Currently
 | `hotkeys` | map `Action` → `{ vkey, modifiers }` | See §5.3 | `modifiers`: Alt = 1, Ctrl = 2, Shift = 4, Win = 8 |
 | `step_size` | `f32` in (0, 1] | `0.1` | Hotkey step size |
 
-**Missing fields** get their defaults.
+**Missing fields** get their defaults (`#[serde(default)]` on the struct).
 
-**Broken file** *(→ fix plan #5)*:
-- It is renamed to `brightnessctl.json.bak`.
-- Defaults are used.
-- The parse error is shown in the status bar.
-- The user's file is **never** overwritten.
+**Out-of-range values** are fixed after loading:
+- presets are clamped to 0–1, and non-finite presets are dropped,
+- an invalid `step_size` falls back to the default.
+
+**Broken file:**
+- It is renamed to `brightnessctl.json.bak`, replacing any older backup.
+- Defaults are used and written to a fresh config.
+- The parse error (line and column) is shown in the status bar.
+- The user's file is **never** overwritten: if the rename fails, nothing is written.
 
 ---
 

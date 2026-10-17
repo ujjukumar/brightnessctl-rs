@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         win::init_dpi()?;
 
         // Initialize state
-        let settings = Settings::load();
+        let (settings, config_warning) = Settings::load();
         let mut monitors = monitors::enumerate_monitors();
         let current = brightness::probe_all(&mut monitors);
         let mut initial_brightness = Vec::new();
@@ -70,7 +70,7 @@ fn main() -> Result<()> {
             monitors,
             brightness: initial_brightness,
             settings,
-            status_message: "Ready".to_string(),
+            status_message: config_warning.unwrap_or_else(|| "Ready".to_string()),
             hover_monitor_idx: None,
             active_monitor_idx: None,
             lock_mode: false,
@@ -92,8 +92,9 @@ fn main() -> Result<()> {
             hkm.register_all(hwnd, &state.settings.hotkeys);
             hkm.sync_status(state);
             
+            // A config error is more important; failed hotkeys also show as HOTKEY ERROR.
             let failed_count = state.hotkey_status.values().filter(|&&v| !v).count();
-            if failed_count > 0 {
+            if failed_count > 0 && state.status_message == "Ready" {
                 state.status_message = format!("Warning: {} hotkeys failed to register", failed_count);
             }
         }

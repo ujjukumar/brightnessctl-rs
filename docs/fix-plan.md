@@ -208,21 +208,28 @@ Test on the laptop's built-in screen.
 
 Tasks:
 
-- [ ] Find the config path with `std::env::current_exe()` → parent folder → `brightnessctl.json`.
-- [ ] Put `#[serde(default)]` on the `Settings` struct so missing fields fall back to `Default`.
-- [ ] If parsing fails:
+- [x] Find the config path with `std::env::current_exe()` → parent folder → `brightnessctl.json`.
+- [x] Put `#[serde(default)]` on the `Settings` struct so missing fields fall back to `Default`.
+- [x] If parsing fails:
   - rename the file to `brightnessctl.json.bak`, replacing any existing `.bak`,
   - continue with defaults,
   - set the status message to something like `Config error at line L, column C. Saved as .bak; using defaults` (from `serde_json::Error::line()` / `column()`).
-- [ ] Validate after loading:
+- [x] Validate after loading:
   - presets: drop NaN, clamp to 0–1,
   - `step_size`: must be greater than 0 and at most 1, otherwise use the default.
-- [ ] Save atomically: write `brightnessctl.json.tmp`, then `std::fs::rename` over the real file.
-- [ ] Make loading and saving take a path so they can be tested. Tests, in a temporary folder:
+- [x] Save atomically: write `brightnessctl.json.tmp`, then `std::fs::rename` over the real file.
+- [x] Make loading and saving take a path so they can be tested. Tests, in a temporary folder:
   - missing `theme` → defaults,
   - invalid JSON → `.bak` created and defaults returned,
   - out-of-range values are clamped,
   - save then load gives the same settings.
+
+*Result:*
+- `Settings::load()` returns `(Settings, Option<String>)`; the warning becomes the first status message. `load_from` and `save_to` take a path.
+- After backing up a broken file, fresh defaults are written to the config path.
+- If the rename fails, nothing is written, so the user's file is never touched.
+- If the file exists but can't be read, defaults are used and the file isn't overwritten.
+- **Checked by hand:** a copy of the exe in a temporary folder, with a broken config, started from the repo root. It showed `Config error at line 3, column 3. Saved as .bak; using defaults`, kept the original text in `.bak`, and left the repo-root `brightnessctl.json` untouched.
 
 **Done when:**
 - starting the exe from a different working directory uses the config next to the exe,
