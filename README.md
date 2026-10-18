@@ -65,7 +65,7 @@
 
  ## 🎮 Usage
 
- 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed.
+ 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward.
  2.  Adjust brightness:
      *   **Drag** or click a slider.
      *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
@@ -78,7 +78,7 @@
 
  ## ⚙️ Configuration
 
- `brightnessctl.json` lives next to `brightnessctl.exe` (whichever folder you start it from) and is created with defaults on first run. Edit it while the app is closed, since the app rewrites it when it saves. You can customize:
+ Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, which is created with defaults on first run. A `brightnessctl.json` that an older version left next to `brightnessctl.exe` is moved there automatically. Edit the file while the app is closed, since the app rewrites it when it saves. You can customize:
 
  *   **Theme:** `"Auto"` (follows Windows), `"Light"`, or `"Dark"`. Also available from the **Theme** menu.
  *   **Hotkeys:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for:
@@ -88,7 +88,7 @@
  *   **Presets:** Brightness levels from 0 to 1, cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`).
  *   **Step Size:** The hotkey step (default `0.1` / 10%).
 
- `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. If the file can't be parsed, it is renamed to `brightnessctl.json.bak`, defaults are used, and the status bar shows the line and column of the error.
+ `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. If the file can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
 
  ---
 

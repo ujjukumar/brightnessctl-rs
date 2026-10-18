@@ -17,6 +17,7 @@ mod actions;
 mod hotkeys;
 mod worker;
 mod log;
+mod instance;
 
 use std::cell::{RefCell, RefMut};
 
@@ -51,6 +52,11 @@ struct App {
 const WM_APP_INIT: u32 = WM_APP;
 
 fn main() -> Result<()> {
+    // Held until main returns; a second launch only brings this window forward.
+    let Some(_instance) = instance::acquire() else {
+        instance::activate_existing();
+        return Ok(());
+    };
     let started = std::time::Instant::now();
     log::reset();
     unsafe {
