@@ -465,11 +465,17 @@ Tasks:
     - Collapsed the last two nested `if`s in `main.rs` with let-chains and replaced `assert_eq!(x, true/false)` in `edid.rs`.
     - The always-true `assert!(monitors.len() >= 0)` was a clippy error, so it's fixed here (see item 23): the test now checks that enumerated monitors don't take input before their probe.
     - CI installs the clippy component and runs `cargo clippy --all-targets --locked -- -D warnings` after `cargo check`. It passes locally with no warnings.
-- [ ] **23. Fix the tests.**
+- [x] **23. Fix the tests.**
   - `test_backoff_escalation` (`brightness.rs:155`) copies the logic instead of calling it. Move failure handling into a real function, e.g. `record_failure()`, and test that.
   - Remove the always-true `assert!(monitors.len() >= 0)` (`monitors.rs:204`).
   - Add tests for the wheel step size: fine step with `Shift`, coarse without.
   - Mark tests that need real monitors with `#[ignore]`.
+  - *Result:*
+    - `test_backoff_escalation`: done in item 6 (failure counting is `Monitor::apply_write_result`, tested directly).
+    - The always-true assert: done in item 22.
+    - The wheel logic moved out of `main.rs` into `AppState::apply_wheel` and `wheel_step`, so the tests call the real code: step sizes with and without Shift (including high-resolution and zero deltas), the 50 ms throttle, "nothing hovered", and lock mode moving every slider. `main.rs` only reads `MK_SHIFT` and writes the returned targets.
+    - Tests that need real monitors were already `#[ignore]` (the 4 hardware tests). The rest pass with or without displays.
+    - The wheel can't be driven from a script here (moving the real cursor is refused, and a posted mouse move is followed at once by `WM_MOUSELEAVE`), so the wheel itself stays on the manual checklist.
 
 ## Phase 8: Documentation
 

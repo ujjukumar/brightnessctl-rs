@@ -3,7 +3,7 @@ use windows::Win32::Foundation::HWND;
 use crate::brightness::{self, PhysicalHandle};
 use crate::settings::{Settings, MonitorState};
 use crate::worker::{MonitorReady, WorkerJob, WriteResult, Worker};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Consecutive failed writes after which a monitor is disabled until the next refresh.
 const MAX_FAILURES: u32 = 10;
@@ -338,6 +338,23 @@ impl AppState {
         }
     }
 
+    /// Applies one wheel notch to the hovered slider, or to every slider in lock mode.
+    /// Returns the monitors to write, or `None` when nothing is hovered or the notch
+    /// came too soon after the previous one.
+    pub fn apply_wheel(&mut self, delta: i16, shift: bool, now: Instant) -> Option<Vec<usize>> {
+        let hovered = self.hover_monitor_idx?;
+        if let Some(last) = self.last_wheel_time
+            && now.duration_since(last) < WHEEL_THROTTLE
+        {
+            return None;
+        }
+        self.last_wheel_time = Some(now);
+
+        let targets = if self.lock_mode { (0..self.monitors.len()).collect() } else { vec![hovered] };
+        self.apply_step(&targets, wheel_step(delta, shift));
+        Some(targets)
+    }
+
     pub fn set_absolute(&mut self, indices: &[usize], value: f32) {
         let value = value.clamp(0.0, 1.0);
         for &idx in indices {
@@ -425,6 +442,18 @@ pub fn parse_percent(text: &str) -> Option<f32> {
     // Only digits are left, so parsing can only fail by overflowing: that's above 100 too.
     let percent = text.parse::<u32>().unwrap_or(u32::MAX);
     Some(percent.min(100) as f32 / 100.0)
+}
+
+/// Mouse wheel steps: coarse by default, fine while Shift is held.
+const WHEEL_STEP: f32 = 0.05;
+const WHEEL_FINE_STEP: f32 = 0.01;
+/// Wheel notches closer together than this are ignored.
+const WHEEL_THROTTLE: Duration = Duration::from_millis(50);
+
+/// The slider change for one wheel notch: positive `delta` (away from the user) brightens.
+pub fn wheel_step(delta: i16, shift: bool) -> f32 {
+    let step = if shift { WHEEL_FINE_STEP } else { WHEEL_STEP };
+    step * f32::from(delta.signum())
 }
 
 #[cfg(test)]
@@ -893,5 +922,44 @@ mod tests {
         assert_eq!(state.editing_monitor, None);
         assert!(state.edit_buffer.is_empty());
         assert_eq!(mailboxes[1].take_pending(), None, "the open edit is dropped, not written");
+    }
+
+    #[test]
+    fn test_wheel_step_sizes() {
+        assert_close(&[wheel_step(120, false)], &[0.05]);
+        assert_close(&[wheel_step(-120, false)], &[-0.05]);
+        assert_close(&[wheel_step(120, true)], &[0.01]);
+        assert_close(&[wheel_step(-120, true)], &[-0.01]);
+        // High-resolution wheels send smaller deltas: still one step per message.
+        assert_close(&[wheel_step(30, false)], &[0.05]);
+        assert_close(&[wheel_step(0, false)], &[0.0]);
+    }
+
+    #[test]
+    fn test_wheel_moves_hovered_slider_and_throttles() {
+        let mut state = state_with(&[0.5, 0.5]);
+        let start = Instant::now();
+        assert_eq!(state.apply_wheel(120, false, start), None, "nothing hovered");
+
+        state.hover_monitor_idx = Some(1);
+        assert_eq!(state.apply_wheel(120, false, start), Some(vec![1]));
+        assert_close(&values(&state), &[0.5, 0.55]);
+
+        let soon = start + Duration::from_millis(20);
+        assert_eq!(state.apply_wheel(120, false, soon), None, "too soon after the last notch");
+        assert_close(&values(&state), &[0.5, 0.55]);
+
+        let later = start + WHEEL_THROTTLE;
+        assert_eq!(state.apply_wheel(-120, true, later), Some(vec![1]));
+        assert_close(&values(&state), &[0.5, 0.54]);
+    }
+
+    #[test]
+    fn test_wheel_in_lock_mode_moves_every_slider() {
+        let mut state = state_with(&[0.2, 0.98]);
+        state.lock_mode = true;
+        state.hover_monitor_idx = Some(0);
+        assert_eq!(state.apply_wheel(120, false, Instant::now()), Some(vec![0, 1]));
+        assert_close(&values(&state), &[0.25, 1.0]);
     }
 }

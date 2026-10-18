@@ -31,6 +31,7 @@ use windows::{
     Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE, VIRTUAL_KEY, VK_ESCAPE, VK_RETURN},
     Win32::UI::HiDpi::GetDpiForWindow,
     Win32::System::LibraryLoader::GetModuleHandleW,
+    Win32::System::SystemServices::MK_SHIFT,
 };
 
 use crate::settings::{Settings, ThemeMode};
@@ -475,30 +476,10 @@ unsafe fn handle_char(window: HWND, unit: u32) {
 unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
     if let Some(mut app) = borrow_app(window) {
         let state = &mut app.state;
-        if let Some(hover_idx) = state.hover_monitor_idx {
-            // Rate limiting
-            let now = std::time::Instant::now();
-            if let Some(last) = state.last_wheel_time
-                && now.duration_since(last) < std::time::Duration::from_millis(50)
-            {
-                return; // Too fast
-            }
-            state.last_wheel_time = Some(now);
-
-            // Shift for fine (0.01), else coarse (0.05)
-            let step = if (keystate & 0x0004) != 0 { 0.01 } else { 0.05 };
-            let direction = if delta > 0 { 1.0 } else { -1.0 };
-            let change = direction * step;
-
-            let targets = if state.lock_mode {
-                (0..state.monitors.len()).collect()
-            } else {
-                vec![hover_idx]
-            };
-
-            state.apply_step(&targets, change);
+        // Only Shift is read, so wheel use never clashes with hotkey modifiers.
+        let shift = u32::from(keystate) & MK_SHIFT.0 != 0;
+        if let Some(targets) = state.apply_wheel(delta, shift, std::time::Instant::now()) {
             state.request_brightness(&targets);
-
             let _ = InvalidateRect(Some(window), None, false);
         }
     }

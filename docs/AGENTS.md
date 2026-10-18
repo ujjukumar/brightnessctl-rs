@@ -237,9 +237,10 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 - Click the track to jump to that value; drag to adjust.
 - Hardware updates live during the drag, and the final value is always written.
 
-**Mouse wheel:**
-- Works while hovering over a slider; no focus needed.
+**Mouse wheel** (`AppState::apply_wheel`, step size from `wheel_step`):
+- Works while hovering over a slider; no focus needed. In lock mode it moves every slider.
 - Coarse step **0.05**, or fine step **0.01** while holding **Shift**. No other modifiers are read, to avoid clashing with hotkeys.
+- Notches less than 50 ms after the previous one are ignored.
 - Clamped to 0–1, never wraps.
 
 **Typed value** (`AppState::begin_edit` / `edit_input` / `commit_edit` / `cancel_edit`):
