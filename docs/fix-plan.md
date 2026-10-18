@@ -479,11 +479,15 @@ Tasks:
 
 ## Phase 8: Documentation
 
-- [ ] **24. README.**
+- [x] **24. README.**
   - Default step size is 0.1, not 0.05 (`README.md:84`).
   - The config file lives next to the exe, and a broken config is backed up to `.bak`.
   - Built-in laptop panels are supported through WMI (`README.md:32`).
   - Startup is now instant (monitors are detected after the window opens).
+  - *Result:*
+    - Fixed the four points above. The configuration section also lists the default presets, the modifier values and the `monitor_states` field, and says to edit the file while the app is closed (the app rewrites it when it saves).
+    - Usage now covers wheel steps (Shift for 1%), typed values, sync mode, automatic refresh on display changes, and the default hotkeys and which monitor they target.
+    - Features: "system colors" was wrong (the app uses its own palette), so it now names what follows Windows: light/dark mode and the title bar. Added the EDID-based restore and the per-monitor worker threads, and linked `docs/AGENTS.md`.
 - [ ] **25. `docs/AGENTS.md`.** Bring it in line with the finished code:
   - add `layout.rs`, `wmi.rs` and `worker.rs` to the module map and data flow,
   - remove every *(→ fix plan #N)* note whose item is done,
