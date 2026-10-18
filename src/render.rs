@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_SIZE_U,
     D2D_RECT_F,
 };
-use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+use windows::Win32::Graphics::Direct2D::{D2D1_ELLIPSE, D2D1_ROUNDED_RECT};
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory,
     IDWriteTextFormat,
@@ -34,6 +34,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
+use crate::state::Backend;
 
 pub struct ColorPalette {
     pub bg: D2D1_COLOR_F,
@@ -259,6 +260,8 @@ impl Renderer {
             rt.BeginDraw();
             rt.Clear(Some(&palette.bg));
 
+            draw_sun(&rt, &layout.title_icon, self.brush_accent.as_ref().unwrap());
+
             // App Title
             let title = w!("Brightness Control");
             rt.DrawText(
@@ -271,6 +274,14 @@ impl Renderer {
             );
 
             for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
+                // Laptop panels are the ones driven through WMI.
+                let icon_brush = self.brush_subdued.as_ref().unwrap();
+                if monitor.backend == Backend::Wmi {
+                    draw_laptop(&rt, &row.icon, icon_brush);
+                } else {
+                    draw_monitor(&rt, &row.icon, icon_brush);
+                }
+
                 // Monitor Name (Label)
                 let display_name = if let Some(ident) = &monitor.identity {
                     format!("{} {}", ident.manufacturer_id, ident.serial)
@@ -448,9 +459,80 @@ impl Renderer {
     }
 }
 
+/// Maps a square grid of `units` x `units` icon units onto a layout rectangle,
+/// so the icons are drawn as shapes and stay sharp at every size and DPI.
+struct IconGrid {
+    left: f32,
+    top: f32,
+    unit: f32,
+}
+
+impl IconGrid {
+    fn new(area: &D2D_RECT_F, units: f32) -> Self {
+        Self { left: area.left, top: area.top, unit: (area.right - area.left) / units }
+    }
+
+    fn len(&self, units: f32) -> f32 {
+        units * self.unit
+    }
+
+    fn point(&self, x: f32, y: f32) -> Vector2 {
+        Vector2 { X: self.left + self.len(x), Y: self.top + self.len(y) }
+    }
+
+    fn rounded(&self, left: f32, top: f32, right: f32, bottom: f32, radius: f32) -> D2D1_ROUNDED_RECT {
+        let (a, b) = (self.point(left, top), self.point(right, bottom));
+        D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F { left: a.X, top: a.Y, right: b.X, bottom: b.Y },
+            radiusX: self.len(radius),
+            radiusY: self.len(radius),
+        }
+    }
+}
+
+/// Header icon: a sun with eight rays (24-unit grid).
+unsafe fn draw_sun(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 24.0);
+    let center = g.point(12.0, 12.0);
+    rt.FillEllipse(&D2D1_ELLIPSE { point: center, radiusX: g.len(4.5), radiusY: g.len(4.5) }, brush);
+    for i in 0..8 {
+        let (sin, cos) = (i as f32 * std::f32::consts::FRAC_PI_4).sin_cos();
+        let ray = |r: f32| g.point(12.0 + cos * r, 12.0 + sin * r);
+        rt.DrawLine(ray(7.5), ray(10.5), brush, g.len(2.0), None);
+    }
+}
+
+/// Row icon for an external display: a screen on a stand (16-unit grid).
+unsafe fn draw_monitor(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    let stroke = g.len(1.5);
+    rt.DrawRoundedRectangle(&g.rounded(1.0, 1.5, 15.0, 11.0, 1.5), brush, stroke, None);
+    rt.DrawLine(g.point(8.0, 11.0), g.point(8.0, 14.0), brush, stroke, None);
+    rt.DrawLine(g.point(4.0, 14.25), g.point(12.0, 14.25), brush, stroke, None);
+}
+
+/// Row icon for a laptop panel: a screen above a wider base (16-unit grid).
+unsafe fn draw_laptop(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    rt.DrawRoundedRectangle(&g.rounded(2.5, 3.0, 13.5, 11.0, 1.0), brush, g.len(1.5), None);
+    rt.DrawLine(g.point(0.75, 13.0), g.point(15.25, 13.0), brush, g.len(2.0), None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_icon_grid_maps_units_onto_the_area() {
+        let area = D2D_RECT_F { left: 10.0, top: 20.0, right: 42.0, bottom: 52.0 };
+        let g = IconGrid::new(&area, 16.0);
+        assert_eq!(g.len(1.0), 2.0);
+        assert_eq!(g.point(0.0, 0.0), Vector2 { X: 10.0, Y: 20.0 });
+        assert_eq!(g.point(16.0, 16.0), Vector2 { X: 42.0, Y: 52.0 });
+        let r = g.rounded(1.0, 2.0, 15.0, 11.0, 1.5);
+        assert_eq!((r.rect.left, r.rect.top, r.rect.right, r.rect.bottom), (12.0, 24.0, 40.0, 42.0));
+        assert_eq!((r.radiusX, r.radiusY), (3.0, 3.0));
+    }
 
     #[test]
     fn test_renderer_new() {
