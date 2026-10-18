@@ -214,8 +214,9 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 - `CoSetProxyBlanket` must receive the interface proxy itself (`IWbemServices`, `IEnumWbemClassObject`), never a cast `IUnknown`. Otherwise every call fails with `WBEM_E_ACCESS_DENIED`.
 
 **Values:**
-- Normalize to 0–100 at the hardware boundary using the device's min/max, with rounding *(→ fix plan #15)*.
-- Treat the hardware min/max as advisory.
+- Normalize to 0–100 at the hardware boundary using the device's min/max, with rounding. All conversions go through `brightness::Range` (`to_raw`, `to_percent`); nothing above the backends sees raw values.
+- An empty or inverted min/max falls back to 0–100, and raw values outside the range are clamped.
+- `verify` compares raw values, because a monitor with fewer than 100 steps maps several percents to the same level.
 
 **Reliability:**
 - After the write that ends a burst, the worker reads the value back (`BrightnessBackend::verify`) to set `write_confirmed`. In-between writes aren't read back, and they leave the flag unchanged.

@@ -419,10 +419,15 @@ Tasks:
     - Checked by screenshot: the title bar is dark at startup and follows Light, Dark and Auto from the menu. A `WM_SETTINGCHANGE` "ImmersiveColorSet" sent to the window is handled without changing the registry.
 - [x] **14. Brushes.** Stop creating `track_brush` and `accent_brush` on every paint (`render.rs:327,344`). Create them once and change their color with `SetColor` for hover and active states.
   - *Result:* `brush_track` and `brush_fill` are created with the other brushes and dropped with them (theme change, device loss) through one `drop_brushes` helper. Paint no longer creates any brush, and nothing inside `BeginDraw`/`EndDraw` can return early with `?` any more. Checked by screenshot: an active slider is drawn lighter while the other row keeps the normal colors.
-- [ ] **15. Brightness math.**
+- [x] **15. Brightness math.**
   - Scale high-level API values to 0–100 using the min/max it returns (`brightness.rs:21-24`).
   - Round instead of truncating in VCP conversions (`brightness.rs:35,84`).
   - Put the conversions in pure functions and test round trips for max = 100, 255 and 50.
+  - *Result:*
+    - `brightness::Range { min, max }` does every conversion (`to_raw`, `to_percent`) with rounding, and both Dxva2 backends use it. An empty or inverted range falls back to 0–100; out-of-range raw values are clamped.
+    - `verify` compares raw values for both Dxva2 backends, so a monitor with fewer than 100 steps isn't reported as unconfirmed.
+    - Tests: endpoints, every percent round trips for max 100 and 255, every raw level round trips for max 50 (percents within 1), rounding cases, clamping.
+    - Both desktop monitors report 0–100, so they behave exactly as before (hardware tests pass, writes confirmed).
 - [x] ~~**16. Stable hash**~~: moved into item 1.
 - [ ] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
 - [ ] **18. Refresh.**

@@ -53,55 +53,89 @@ pub trait BrightnessBackend {
     }
 }
 
+/// The raw brightness range a monitor reports. Everything above the hardware
+/// boundary works in percent, so all conversions go through here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Range {
+    min: u32,
+    max: u32,
+}
+
+impl Range {
+    /// An empty or inverted range can't be scaled, so it falls back to 0-100.
+    fn new(min: u32, max: u32) -> Self {
+        if max > min { Self { min, max } } else { Self { min: 0, max: 100 } }
+    }
+
+    fn span(self) -> u64 {
+        u64::from(self.max - self.min)
+    }
+
+    /// Percent to the nearest raw value.
+    fn to_raw(self, percent: u32) -> u32 {
+        let scaled = (u64::from(percent.min(100)) * self.span() + 50) / 100;
+        self.min + scaled as u32
+    }
+
+    /// Raw value to the nearest percent.
+    fn to_percent(self, raw: u32) -> u32 {
+        let offset = u64::from(raw.clamp(self.min, self.max) - self.min);
+        ((offset * 100 + self.span() / 2) / self.span()) as u32
+    }
+}
+
+/// Dxva2's high-level API: (min, current, max), all raw.
+fn read_high_level(handle: &PhysicalHandle) -> Option<(u32, u32, u32)> {
+    let (mut min, mut current, mut max) = (0, 0, 0);
+    let ok = unsafe { GetMonitorBrightness(handle.raw(), &mut min, &mut current, &mut max) != 0 };
+    ok.then_some((min, current, max))
+}
+
+/// Raw VCP 0x10: (current, max).
+fn read_vcp(handle: &PhysicalHandle) -> Option<(u32, u32)> {
+    let (mut current, mut max) = (0, 0);
+    let ok = unsafe {
+        GetVCPFeatureAndVCPFeatureReply(handle.raw(), VCP_CODE_BRIGHTNESS, None, &mut current, Some(&mut max)) != 0
+    };
+    ok.then_some((current, max))
+}
+
 struct HighLevelBackend {
     handle: PhysicalHandle,
+    range: Range,
 }
 
 impl BrightnessBackend for HighLevelBackend {
     fn read(&mut self) -> Option<u32> {
-        let (mut min, mut current, mut max) = (0, 0, 0);
-        let ok = unsafe { GetMonitorBrightness(self.handle.raw(), &mut min, &mut current, &mut max) != 0 };
-        ok.then_some(current)
+        read_high_level(&self.handle).map(|(_, raw, _)| self.range.to_percent(raw))
     }
 
     fn write(&mut self, percent: u32) -> bool {
-        unsafe { SetMonitorBrightness(self.handle.raw(), percent) != 0 }
+        unsafe { SetMonitorBrightness(self.handle.raw(), self.range.to_raw(percent)) != 0 }
+    }
+
+    /// Compares raw values: with fewer than 100 steps, several percents share one.
+    fn verify(&mut self, percent: u32) -> bool {
+        read_high_level(&self.handle).map(|(_, raw, _)| raw) == Some(self.range.to_raw(percent))
     }
 }
 
 struct VcpBackend {
     handle: PhysicalHandle,
-    max: u32,
-}
-
-impl VcpBackend {
-    fn to_raw(&self, percent: u32) -> u32 {
-        (percent * self.max) / 100
-    }
-
-    /// Current raw value and the monitor's maximum.
-    fn read_raw(&mut self) -> Option<(u32, u32)> {
-        let (mut current, mut max) = (0, 0);
-        let ok = unsafe {
-            GetVCPFeatureAndVCPFeatureReply(self.handle.raw(), VCP_CODE_BRIGHTNESS, None, &mut current, Some(&mut max)) != 0
-        };
-        ok.then_some((current, max))
-    }
+    range: Range,
 }
 
 impl BrightnessBackend for VcpBackend {
     fn read(&mut self) -> Option<u32> {
-        self.read_raw().map(|(raw, _)| (raw * 100) / self.max)
+        read_vcp(&self.handle).map(|(raw, _)| self.range.to_percent(raw))
     }
 
     fn write(&mut self, percent: u32) -> bool {
-        let raw = self.to_raw(percent);
-        unsafe { SetVCPFeature(self.handle.raw(), VCP_CODE_BRIGHTNESS, raw) != 0 }
+        unsafe { SetVCPFeature(self.handle.raw(), VCP_CODE_BRIGHTNESS, self.range.to_raw(percent)) != 0 }
     }
 
     fn verify(&mut self, percent: u32) -> bool {
-        let expected = self.to_raw(percent);
-        self.read_raw().map(|(raw, _)| raw) == Some(expected)
+        read_vcp(&self.handle).map(|(raw, _)| raw) == Some(self.range.to_raw(percent))
     }
 }
 
@@ -152,22 +186,26 @@ pub fn with_probed_backend(
     f: impl FnOnce(Probe, Option<&mut dyn BrightnessBackend>),
 ) {
     if let Some(handle) = physical {
-        let (mut min, mut current, mut max) = (0, 0, 0);
-        if unsafe { GetMonitorBrightness(handle.raw(), &mut min, &mut current, &mut max) } != 0 {
-            let probe = Probe { backend: Backend::HighLevel, hardware_min: min, hardware_max: max, value: Some(current) };
-            return f(probe, Some(&mut HighLevelBackend { handle }));
+        if let Some((min, current, max)) = read_high_level(&handle) {
+            let range = Range::new(min, max);
+            let probe = Probe {
+                backend: Backend::HighLevel,
+                hardware_min: range.min,
+                hardware_max: range.max,
+                value: Some(range.to_percent(current)),
+            };
+            return f(probe, Some(&mut HighLevelBackend { handle, range }));
         }
 
-        let mut vcp = VcpBackend { handle, max: 100 };
-        if let Some((current, max)) = vcp.read_raw() {
-            vcp.max = if max > 0 { max } else { 100 };
+        if let Some((current, max)) = read_vcp(&handle) {
+            let range = Range::new(0, max);
             let probe = Probe {
-                backend: Backend::Vcp { max: vcp.max },
-                hardware_min: 0,
-                hardware_max: vcp.max,
-                value: Some((current * 100) / vcp.max),
+                backend: Backend::Vcp { max: range.max },
+                hardware_min: range.min,
+                hardware_max: range.max,
+                value: Some(range.to_percent(current)),
             };
-            return f(probe, Some(&mut vcp));
+            return f(probe, Some(&mut VcpBackend { handle, range }));
         }
     }
 
@@ -209,6 +247,63 @@ mod tests {
                 assert_ne!(probe.backend, Backend::Unsupported);
             });
         }
+    }
+
+    #[test]
+    fn test_range_endpoints() {
+        for (min, max) in [(0, 100), (0, 255), (0, 50), (10, 60)] {
+            let range = Range::new(min, max);
+            assert_eq!(range.to_raw(0), min);
+            assert_eq!(range.to_raw(100), max);
+            assert_eq!(range.to_percent(min), 0);
+            assert_eq!(range.to_percent(max), 100);
+        }
+    }
+
+    #[test]
+    fn test_range_percent_round_trip() {
+        // With at least 100 raw steps every percent survives a write and read back.
+        for max in [100, 255] {
+            let range = Range::new(0, max);
+            for percent in 0..=100 {
+                assert_eq!(range.to_percent(range.to_raw(percent)), percent, "max {max}, {percent}%");
+            }
+        }
+    }
+
+    #[test]
+    fn test_range_with_fewer_steps_than_percents() {
+        let range = Range::new(0, 50);
+        // Every raw level is reachable and reads back as the percent that sets it.
+        for raw in 0..=50 {
+            assert_eq!(range.to_raw(range.to_percent(raw)), raw);
+        }
+        // A percent reads back as the nearest one the monitor can show.
+        for percent in 0..=100 {
+            let back = range.to_percent(range.to_raw(percent));
+            assert!(back.abs_diff(percent) <= 1, "{percent}% read back as {back}%");
+        }
+    }
+
+    #[test]
+    fn test_range_rounds_instead_of_truncating() {
+        let range = Range::new(0, 255);
+        assert_eq!(range.to_raw(50), 128); // 127.5
+        assert_eq!(range.to_raw(1), 3); // 2.55
+        assert_eq!(range.to_percent(254), 100); // 99.6
+        assert_eq!(range.to_percent(1), 0); // 0.39
+    }
+
+    #[test]
+    fn test_range_clamps_and_rejects_empty_ranges() {
+        let range = Range::new(10, 60);
+        assert_eq!(range.to_percent(0), 0);
+        assert_eq!(range.to_percent(200), 100);
+        assert_eq!(range.to_raw(150), 60);
+        assert_eq!(range.to_raw(50), 35);
+
+        assert_eq!(Range::new(0, 0), Range::new(0, 100));
+        assert_eq!(Range::new(80, 20), Range::new(0, 100));
     }
 
     #[test]
