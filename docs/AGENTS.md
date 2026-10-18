@@ -296,8 +296,11 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 
 ### 5.6 Refresh
 
-- **View → Refresh Monitors** finds the monitors again and resets per-monitor state.
-- It should also restore saved values and refresh automatically on `WM_DISPLAYCHANGE` *(→ fix plan #18)*.
+- **View → Refresh Monitors** and `WM_DISPLAYCHANGE` both go through `start_monitors`:
+  - Unsaved monitor states are saved first, then the old workers are stopped and the monitors are found again.
+  - Hover, active, edit and drag state are cleared (`AppState::replace_monitors`), since they index the old list.
+  - New workers probe and apply Smart Restore, exactly as at startup.
+- `WM_DISPLAYCHANGE` re-arms a 500 ms one-shot timer (`REFRESH_TIMER_ID`), so a burst of display changes refreshes once.
 
 ---
 

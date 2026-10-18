@@ -117,6 +117,10 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const SAVE_TIMER_ID: usize = 1;
 const SAVE_DELAY_MS: u32 = 1000;
 
+/// One-shot timer that refreshes the monitors once a burst of display changes settles.
+const REFRESH_TIMER_ID: usize = 2;
+const REFRESH_DELAY_MS: u32 = 500;
+
 /// Saves monitor states if a write changed them since the last save.
 unsafe fn save_if_dirty() {
     if let Some(state) = APP_STATE.as_mut()
@@ -130,13 +134,24 @@ unsafe fn save_if_dirty() {
 /// Finds the monitors and starts their workers. Only the registry and SetupDi are
 /// read here; each worker talks to its monitor on its own thread.
 unsafe fn start_monitors(window: HWND) {
+    // Smart Restore reads the saved states, so save what the old monitors wrote first.
+    save_if_dirty();
+    let _ = KillTimer(Some(window), REFRESH_TIMER_ID);
+    DRAGGING_MONITOR_IDX = None;
     if let Some(state) = APP_STATE.as_mut() {
         let started = std::time::Instant::now();
-        // Replacing the list drops the old monitors, which stops their workers.
-        state.monitors = monitors::enumerate_monitors();
+        state.replace_monitors(monitors::enumerate_monitors());
         state.start_workers(window);
         debug_log!("found {} monitors in {:?}", state.monitors.len(), started.elapsed());
         let _ = InvalidateRect(Some(window), None, false);
+    }
+}
+
+/// Finds the monitors again (menu or display change) and reports the count.
+unsafe fn refresh_monitors(window: HWND, reason: &str) {
+    start_monitors(window);
+    if let Some(state) = APP_STATE.as_mut() {
+        state.status_message = format!("{reason} (found {})", state.monitors.len());
     }
 }
 
@@ -204,12 +219,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_EXIT => {
                         let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
-                    menu::IDM_REFRESH => {
-                        start_monitors(window);
-                        if let Some(state) = APP_STATE.as_mut() {
-                            state.status_message = format!("Monitors refreshed (found {})", state.monitors.len());
-                        }
-                    }
+                    menu::IDM_REFRESH => refresh_monitors(window, "Monitors refreshed"),
                     menu::IDM_LOCK_MODE => {
                         if let Some(state) = APP_STATE.as_mut() {
                             state.lock_mode = !state.lock_mode;
@@ -347,6 +357,16 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_TIMER if wparam.0 == SAVE_TIMER_ID => {
                 let _ = KillTimer(Some(window), SAVE_TIMER_ID);
                 save_if_dirty();
+                LRESULT(0)
+            }
+            WM_DISPLAYCHANGE => {
+                // Monitors were added, removed or rearranged. Re-arming the timer means a
+                // burst of changes refreshes once, after Windows has settled.
+                SetTimer(Some(window), REFRESH_TIMER_ID, REFRESH_DELAY_MS, None);
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == REFRESH_TIMER_ID => {
+                refresh_monitors(window, "Displays changed");
                 LRESULT(0)
             }
             WM_APP_INIT => {

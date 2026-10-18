@@ -227,6 +227,15 @@ impl AppState {
         self.settings_dirty = false;
     }
 
+    /// Swaps in a freshly enumerated monitor list. Dropping the old monitors stops their
+    /// workers; hover, active and edit indexes pointed into the old list, so they're cleared.
+    pub fn replace_monitors(&mut self, monitors: Vec<Monitor>) {
+        self.monitors = monitors;
+        self.hover_monitor_idx = None;
+        self.active_monitor_idx = None;
+        self.cancel_edit();
+    }
+
     /// Starts a worker for every monitor, reporting to `hwnd`. Each worker probes its
     /// monitor, applies Smart Restore and reports `WM_APP_MONITOR_READY`.
     pub fn start_workers(&mut self, hwnd: HWND) {
@@ -866,5 +875,22 @@ mod tests {
         assert!(!state.edit_input('1'));
         state.begin_edit(3);
         assert_eq!(state.editing_monitor, None);
+    }
+
+    #[test]
+    fn test_replace_monitors_clears_indexes() {
+        let (mut state, mailboxes) = editable(&[0.5, 0.6]);
+        state.hover_monitor_idx = Some(1);
+        state.active_monitor_idx = Some(1);
+        state.begin_edit(1);
+        type_text(&mut state, "\u{8}\u{8}9");
+
+        state.replace_monitors(vec![monitor(0.2)]);
+        assert_eq!(values(&state), vec![0.2]);
+        assert_eq!(state.hover_monitor_idx, None);
+        assert_eq!(state.active_monitor_idx, None);
+        assert_eq!(state.editing_monitor, None);
+        assert!(state.edit_buffer.is_empty());
+        assert_eq!(mailboxes[1].take_pending(), None, "the open edit is dropped, not written");
     }
 }

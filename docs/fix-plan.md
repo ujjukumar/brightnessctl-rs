@@ -431,10 +431,15 @@ Tasks:
 - [x] ~~**16. Stable hash**~~: moved into item 1.
 - [x] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
   - *Result:* `WM_DESTROY` unregisters every hotkey before quitting. The empty `Drop` impl (it only held a comment about this) is gone. A unit test registers a free key combination on the test thread, shows a second registration fails while it's held, and succeeds again after `unregister_all`. The app still closes cleanly with exit code 0.
-- [ ] **18. Refresh.**
+- [x] **18. Refresh.**
   - ~~Make `IDM_REFRESH` (`main.rs:159-173`) stop and join the worker threads, find the monitors again, and use the startup path, including Smart Restore.~~ Done in item 9 (`start_monitors`).
   - Reset the hover, active, editing and drag indexes.
   - Refresh automatically on `WM_DISPLAYCHANGE`, delayed with a one-shot timer of about 500 ms.
+  - *Result:*
+    - `AppState::replace_monitors` swaps the list and clears the hover, active and edit state (an open edit is dropped, not written); `start_monitors` also clears the drag index. Unit test included.
+    - `start_monitors` saves unsaved monitor states first, so Smart Restore on the new monitors uses the latest written values.
+    - `WM_DISPLAYCHANGE` re-arms a 500 ms one-shot timer (`REFRESH_TIMER_ID`), so a burst of changes refreshes once. The status bar says "Displays changed (found N)". A manual refresh cancels a pending one.
+    - Checked by posting three `WM_DISPLAYCHANGE` messages 150 ms apart: the monitors were enumerated and probed once, about 500 ms after the last one.
 
 ## Phase 7: Code structure and tests
 
