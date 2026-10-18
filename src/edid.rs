@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(ident.manufacturer_id, "DEL");
         assert_eq!(ident.product_code, 0xA050);
         assert_eq!(ident.serial, "12345678");
-        assert_eq!(ident.is_fallback, false);
+        assert!(!ident.is_fallback);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         let ident = parse_identity(&edid).unwrap();
         assert_eq!(ident.manufacturer_id, "ABC");
         assert_eq!(ident.serial, "SN123");
-        assert_eq!(ident.is_fallback, false);
+        assert!(!ident.is_fallback);
     }
 
     #[test]
@@ -160,7 +160,7 @@ mod tests {
         let ident2 = parse_identity(&edid).unwrap();
         
         assert_eq!(ident1.manufacturer_id, "DEL");
-        assert_eq!(ident1.is_fallback, true);
+        assert!(ident1.is_fallback);
         assert_eq!(ident1.serial, ident2.serial); // Determinism
         
         // Change one byte

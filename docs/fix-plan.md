@@ -456,10 +456,15 @@ Tasks:
     - Checked edit, drag, theme, `WM_SETTINGCHANGE`, display-change and save scripts: no skipped messages in the log, exit code 0, startup unchanged.
 - [x] **20.** Layout defined twice: done in item 3.
 - [x] **21.** Brightness stored in several places: done in item 6.
-- [ ] **22. Remove unused code and warnings.**
+- [x] **22. Remove unused code and warnings.**
   - Remove the unused `Target` and `Command` (`actions.rs:23,29`), `should_restore` (`brightness.rs:124`, used only by its own test) and `is_registered` (`hotkeys.rs:46`).
   - Fix every `cargo clippy --all-targets` warning.
   - Add `cargo clippy --all-targets --locked -- -D warnings` to `.github/workflows/ci.yml`.
+  - *Result:*
+    - Removed `Target`, `Command` and `is_registered` (and the test that only covered `is_registered`). `should_restore` stays: Smart Restore in `start_workers` uses it since item 9.
+    - Collapsed the last two nested `if`s in `main.rs` with let-chains and replaced `assert_eq!(x, true/false)` in `edid.rs`.
+    - The always-true `assert!(monitors.len() >= 0)` was a clippy error, so it's fixed here (see item 23): the test now checks that enumerated monitors don't take input before their probe.
+    - CI installs the clippy component and runs `cargo clippy --all-targets --locked -- -D warnings` after `cargo check`. It passes locally with no warnings.
 - [ ] **23. Fix the tests.**
   - `test_backoff_escalation` (`brightness.rs:155`) copies the logic instead of calling it. Move failure handling into a real function, e.g. `record_failure()`, and test that.
   - Remove the always-true `assert!(monitors.len() >= 0)` (`monitors.rs:204`).

@@ -43,10 +43,6 @@ impl HotkeyManager {
         self.registrations.clear();
     }
 
-    pub fn is_registered(&self, action: Action) -> bool {
-        *self.registrations.get(&action).unwrap_or(&false)
-    }
-
     pub fn sync_status(&self, state: &mut crate::state::AppState) {
         state.hotkey_status = self.registrations.clone();
     }
@@ -60,12 +56,6 @@ mod tests {
     fn test_hotkey_manager_new() {
         let hkm = HotkeyManager::new();
         assert!(hkm.registrations.is_empty());
-    }
-
-    #[test]
-    fn test_is_registered_fallback() {
-        let hkm = HotkeyManager::new();
-        assert!(!hkm.is_registered(Action::StepUp));
     }
 
     #[test]

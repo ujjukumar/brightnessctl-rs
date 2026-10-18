@@ -338,16 +338,15 @@ Stored **next to the EXE** (`Settings::default_path`), whatever the working dire
 ```powershell
 cargo build              # debug
 cargo test               # unit tests (some create real windows / enumerate monitors)
-cargo clippy --all-targets
+cargo clippy --all-targets --locked -- -D warnings
 cargo build --release    # target\release\brightnessctl.exe, must stay < 1 MB
 ```
 
 **CI** (`.github/workflows/ci.yml`) runs on `windows-latest` on pushes and PRs to `main`:
 - `cargo check --locked`,
+- `cargo clippy --all-targets --locked -- -D warnings` (any warning fails the build),
 - `cargo test --locked`,
 - `cargo build --release --locked`.
-
-Fix plan #22 adds `cargo clippy --all-targets --locked -- -D warnings`.
 
 **Release** (`.github/workflows/release.yml`) runs on a `v*` tag or manual trigger. It builds and packages:
 - `brightnessctl-<tag>-windows-x86_64.zip` (EXE + default `brightnessctl.json` + README + LICENSE),

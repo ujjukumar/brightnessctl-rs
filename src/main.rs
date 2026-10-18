@@ -478,10 +478,10 @@ unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
         if let Some(hover_idx) = state.hover_monitor_idx {
             // Rate limiting
             let now = std::time::Instant::now();
-            if let Some(last) = state.last_wheel_time {
-                if now.duration_since(last) < std::time::Duration::from_millis(50) {
-                    return; // Too fast
-                }
+            if let Some(last) = state.last_wheel_time
+                && now.duration_since(last) < std::time::Duration::from_millis(50)
+            {
+                return; // Too fast
             }
             state.last_wheel_time = Some(now);
 
@@ -513,10 +513,10 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
             // Refine targeting: If default fallback was chosen (no UI hover/focus), check system cursor
             if !state.lock_mode && state.hover_monitor_idx.is_none() && state.active_monitor_idx.is_none() {
                 let hmonitor = monitors::get_monitor_handle_at_cursor();
-                if hmonitor != 0 {
-                    if let Some(idx) = state.monitors.iter().position(|m| m.hmonitor == hmonitor) {
-                        targets = vec![idx];
-                    }
+                if hmonitor != 0
+                    && let Some(idx) = state.monitors.iter().position(|m| m.hmonitor == hmonitor)
+                {
+                    targets = vec![idx];
                 }
             }
 

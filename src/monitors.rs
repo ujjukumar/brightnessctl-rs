@@ -252,10 +252,12 @@ mod tests {
 
     #[test]
     fn test_enumerate_monitors() {
-        let monitors = enumerate_monitors();
-        // Since monitors.len() is usize, it's always >= 0.
-        // We just want to check it didn't panic.
-        assert!(monitors.len() >= 0); 
+        // Works with or without displays attached: it must not panic, and no
+        // monitor takes input before its worker has probed it.
+        for monitor in enumerate_monitors() {
+            assert!(!monitor.ready);
+            assert!(!monitor.accepts_input());
+        }
     }
 
     #[test]

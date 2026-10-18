@@ -19,18 +19,6 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Target {
-    Focused,
-    Global,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Command {
-    pub action: Action,
-    pub target: Target,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
