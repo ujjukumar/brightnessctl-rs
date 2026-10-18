@@ -441,6 +441,8 @@ Tasks:
     - `WM_DISPLAYCHANGE` re-arms a 500 ms one-shot timer (`REFRESH_TIMER_ID`), so a burst of changes refreshes once. The status bar says "Displays changed (found N)". A manual refresh cancels a pending one.
     - Checked by posting three `WM_DISPLAYCHANGE` messages 150 ms apart: the monitors were enumerated and probed once, about 500 ms after the last one.
 
+**Phase 6 measured:** release binary 269,824 bytes (+2.5 KB for the DWM title bar and the display-change refresh).
+
 ## Phase 7: Code structure and tests
 
 - [ ] **19. Remove the global state.** Replace the `static mut` globals (`main.rs:32-37`) with an `App` struct. Pass it through `CreateWindowExW`'s `lpParam`, store it in `GWLP_USERDATA` during `WM_NCCREATE`, and fetch it in `wnd_proc`. Remove `#![allow(static_mut_refs)]`.
