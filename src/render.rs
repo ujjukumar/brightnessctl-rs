@@ -3,22 +3,28 @@ use windows::core::{Interface, Result, w};
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::{
+    ID2D1Bitmap,
     ID2D1Factory,
     ID2D1HwndRenderTarget,
     ID2D1RenderTarget,
     ID2D1SolidColorBrush,
     D2D1CreateFactory,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_BITMAP_PROPERTIES,
     D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_NONE,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED,
     D2D1_COLOR_F,
+    D2D1_PIXEL_FORMAT,
     D2D_SIZE_U,
     D2D_RECT_F,
 };
-use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Direct2D::{D2D1_ELLIPSE, D2D1_ROUNDED_RECT};
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory,
     IDWriteTextFormat,
@@ -34,6 +40,8 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
+use crate::state::Backend;
+use crate::background::{self, Picture};
 
 pub struct ColorPalette {
     pub bg: D2D1_COLOR_F,
@@ -79,6 +87,9 @@ pub struct Renderer {
     current_theme_is_dark: Option<bool>,
     /// DPI the render target currently draws at; 0 when there is no render target.
     dpi: u32,
+    /// The decoded background picture, kept so the bitmap can be rebuilt after a device loss.
+    background: Option<Picture>,
+    background_bitmap: Option<ID2D1Bitmap>,
 }
 
 impl Renderer {
@@ -104,6 +115,8 @@ impl Renderer {
                 brush_fill: None,
                 current_theme_is_dark: None,
                 dpi: 0,
+                background: None,
+                background_bitmap: None,
             })
         }
     }
@@ -220,7 +233,19 @@ impl Renderer {
     unsafe fn discard_device_resources(&mut self) {
         self.render_target = None;
         self.drop_brushes();
+        self.background_bitmap = None;
         self.dpi = 0;
+    }
+
+    /// Replaces the background picture; `None` goes back to the plain theme color.
+    pub fn set_background(&mut self, picture: Option<Picture>) {
+        self.background = picture;
+        self.background_bitmap = None;
+    }
+
+    /// Whether the background (if any) is big enough for a client of `width` x `height` pixels.
+    pub fn background_covers(&self, width: u32, height: u32) -> bool {
+        self.background.as_ref().is_none_or(|picture| picture.covers(width, height))
     }
 
     /// Resizes the drawing surface to the new client size in pixels (from `WM_SIZE`).
@@ -256,8 +281,46 @@ impl Renderer {
 
             let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
 
+            if self.background_bitmap.is_none()
+                && let Some(picture) = &self.background
+            {
+                let properties = D2D1_BITMAP_PROPERTIES {
+                    pixelFormat: D2D1_PIXEL_FORMAT {
+                        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                    },
+                    // One bitmap DIP per pixel; `crop` works in these units.
+                    dpiX: 96.0,
+                    dpiY: 96.0,
+                };
+                self.background_bitmap = rt
+                    .CreateBitmap(
+                        D2D_SIZE_U { width: picture.width, height: picture.height },
+                        Some(picture.pixels.as_ptr().cast()),
+                        picture.width * 4,
+                        &properties,
+                    )
+                    .ok();
+            }
+
             rt.BeginDraw();
             rt.Clear(Some(&palette.bg));
+
+            // Drawn faded over the theme color, which works as the dim layer.
+            if let Some(bitmap) = &self.background_bitmap {
+                let picture = bitmap.GetSize();
+                let source = background::crop(picture.width, picture.height, size.width, size.height);
+                let window = D2D_RECT_F { left: 0.0, top: 0.0, right: size.width, bottom: size.height };
+                rt.DrawBitmap(
+                    bitmap,
+                    Some(&window),
+                    1.0 - state.settings.background_dim,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    Some(&source),
+                );
+            }
+
+            draw_sun(&rt, &layout.title_icon, self.brush_accent.as_ref().unwrap());
 
             // App Title
             let title = w!("Brightness Control");
@@ -271,6 +334,14 @@ impl Renderer {
             );
 
             for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
+                // Laptop panels are the ones driven through WMI.
+                let icon_brush = self.brush_subdued.as_ref().unwrap();
+                if monitor.backend == Backend::Wmi {
+                    draw_laptop(&rt, &row.icon, icon_brush);
+                } else {
+                    draw_monitor(&rt, &row.icon, icon_brush);
+                }
+
                 // Monitor Name (Label)
                 let display_name = if let Some(ident) = &monitor.identity {
                     format!("{} {}", ident.manufacturer_id, ident.serial)
@@ -448,9 +519,80 @@ impl Renderer {
     }
 }
 
+/// Maps a square grid of `units` x `units` icon units onto a layout rectangle,
+/// so the icons are drawn as shapes and stay sharp at every size and DPI.
+struct IconGrid {
+    left: f32,
+    top: f32,
+    unit: f32,
+}
+
+impl IconGrid {
+    fn new(area: &D2D_RECT_F, units: f32) -> Self {
+        Self { left: area.left, top: area.top, unit: (area.right - area.left) / units }
+    }
+
+    fn len(&self, units: f32) -> f32 {
+        units * self.unit
+    }
+
+    fn point(&self, x: f32, y: f32) -> Vector2 {
+        Vector2 { X: self.left + self.len(x), Y: self.top + self.len(y) }
+    }
+
+    fn rounded(&self, left: f32, top: f32, right: f32, bottom: f32, radius: f32) -> D2D1_ROUNDED_RECT {
+        let (a, b) = (self.point(left, top), self.point(right, bottom));
+        D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F { left: a.X, top: a.Y, right: b.X, bottom: b.Y },
+            radiusX: self.len(radius),
+            radiusY: self.len(radius),
+        }
+    }
+}
+
+/// Header icon: a sun with eight rays (24-unit grid).
+unsafe fn draw_sun(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 24.0);
+    let center = g.point(12.0, 12.0);
+    rt.FillEllipse(&D2D1_ELLIPSE { point: center, radiusX: g.len(4.5), radiusY: g.len(4.5) }, brush);
+    for i in 0..8 {
+        let (sin, cos) = (i as f32 * std::f32::consts::FRAC_PI_4).sin_cos();
+        let ray = |r: f32| g.point(12.0 + cos * r, 12.0 + sin * r);
+        rt.DrawLine(ray(7.5), ray(10.5), brush, g.len(2.0), None);
+    }
+}
+
+/// Row icon for an external display: a screen on a stand (16-unit grid).
+unsafe fn draw_monitor(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    let stroke = g.len(1.5);
+    rt.DrawRoundedRectangle(&g.rounded(1.0, 1.5, 15.0, 11.0, 1.5), brush, stroke, None);
+    rt.DrawLine(g.point(8.0, 11.0), g.point(8.0, 14.0), brush, stroke, None);
+    rt.DrawLine(g.point(4.0, 14.25), g.point(12.0, 14.25), brush, stroke, None);
+}
+
+/// Row icon for a laptop panel: a screen above a wider base (16-unit grid).
+unsafe fn draw_laptop(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    rt.DrawRoundedRectangle(&g.rounded(2.5, 3.0, 13.5, 11.0, 1.0), brush, g.len(1.5), None);
+    rt.DrawLine(g.point(0.75, 13.0), g.point(15.25, 13.0), brush, g.len(2.0), None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_icon_grid_maps_units_onto_the_area() {
+        let area = D2D_RECT_F { left: 10.0, top: 20.0, right: 42.0, bottom: 52.0 };
+        let g = IconGrid::new(&area, 16.0);
+        assert_eq!(g.len(1.0), 2.0);
+        assert_eq!(g.point(0.0, 0.0), Vector2 { X: 10.0, Y: 20.0 });
+        assert_eq!(g.point(16.0, 16.0), Vector2 { X: 42.0, Y: 52.0 });
+        let r = g.rounded(1.0, 2.0, 15.0, 11.0, 1.5);
+        assert_eq!((r.rect.left, r.rect.top, r.rect.right, r.rect.bottom), (12.0, 24.0, 40.0, 42.0));
+        assert_eq!((r.radiusX, r.radiusY), (3.0, 3.0));
+    }
 
     #[test]
     fn test_renderer_new() {

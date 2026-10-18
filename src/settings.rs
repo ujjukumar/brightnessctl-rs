@@ -55,6 +55,11 @@ pub struct Settings {
     pub presets: Vec<f32>,
     pub hotkeys: HashMap<Action, Hotkey>,
     pub step_size: f32,
+    /// Picture drawn behind the sliders; `None` keeps the plain background.
+    pub background_image: Option<PathBuf>,
+    /// How much the picture is dimmed toward the theme color: 0.0 shows it at full
+    /// strength, 1.0 hides it.
+    pub background_dim: f32,
 }
 
 fn default_presets() -> Vec<f32> {
@@ -63,6 +68,10 @@ fn default_presets() -> Vec<f32> {
 
 fn default_step_size() -> f32 {
     0.1
+}
+
+fn default_background_dim() -> f32 {
+    0.6
 }
 
 fn default_hotkeys() -> HashMap<Action, Hotkey> {
@@ -86,6 +95,8 @@ impl Default for Settings {
             presets: default_presets(),
             hotkeys: default_hotkeys(),
             step_size: default_step_size(),
+            background_image: None,
+            background_dim: default_background_dim(),
         }
     }
 }
@@ -167,7 +178,9 @@ impl Settings {
             Err(err) => return (Self::default(), Some(format!("Config unreadable ({err}); using defaults"))),
         };
 
-        match serde_json::from_slice::<Settings>(&bytes) {
+        // Some editors (and PowerShell 5) save UTF-8 with a byte order mark.
+        let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+        match serde_json::from_slice::<Settings>(json) {
             Ok(mut settings) => {
                 settings.sanitize();
                 (settings, None)
@@ -212,6 +225,11 @@ impl Settings {
         if !(self.step_size.is_finite() && self.step_size > 0.0 && self.step_size <= 1.0) {
             self.step_size = default_step_size();
         }
+        self.background_dim = if self.background_dim.is_finite() {
+            self.background_dim.clamp(0.0, 1.0)
+        } else {
+            default_background_dim()
+        };
     }
 }
 
@@ -334,6 +352,17 @@ mod tests {
     }
 
     #[test]
+    fn test_utf8_byte_order_mark_is_accepted() {
+        let path = test_dir("bom").join(CONFIG_FILE_NAME);
+
+        fs::write(&path, b"\xEF\xBB\xBF{ \"theme\": \"Light\" }").unwrap();
+        let (settings, warning) = Settings::load_from(&path);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(settings.theme, ThemeMode::Light);
+        assert!(!backup_path(&path).exists());
+    }
+
+    #[test]
     fn test_invalid_json_is_backed_up_not_overwritten() {
         let dir = test_dir("invalid");
         let path = dir.join(CONFIG_FILE_NAME);
@@ -366,6 +395,11 @@ mod tests {
             fs::write(&path, format!(r#"{{ "step_size": {bad_step} }}"#)).unwrap();
             assert_eq!(Settings::load_from(&path).0.step_size, default_step_size());
         }
+
+        for (dim, expected) in [("-0.5", 0.0), ("0.25", 0.25), ("3", 1.0)] {
+            fs::write(&path, format!(r#"{{ "background_dim": {dim} }}"#)).unwrap();
+            assert_eq!(Settings::load_from(&path).0.background_dim, expected);
+        }
     }
 
     #[test]
@@ -374,6 +408,8 @@ mod tests {
         let mut settings = Settings {
             theme: ThemeMode::Light,
             step_size: 0.05,
+            background_image: Some(PathBuf::from(r"C:\Users\Example\Pictures\hills.jpg")),
+            background_dim: 0.35,
             ..Default::default()
         };
         let identity = MonitorIdentity {
@@ -459,6 +495,8 @@ mod tests {
         assert_eq!(settings.theme, ThemeMode::Auto);
         assert!(!settings.presets.is_empty());
         assert!(settings.hotkeys.contains_key(&Action::StepUp));
+        assert_eq!(settings.background_image, None);
+        assert_eq!(settings.background_dim, default_background_dim());
     }
 
     #[test]

@@ -10,9 +10,13 @@ pub const MARGIN: f32 = 24.0;
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 
 const TITLE_HEIGHT: f32 = 32.0;
+const TITLE_ICON_SIZE: f32 = 24.0;
 const HEADER_HEIGHT: f32 = 48.0;
 const ROW_PITCH: f32 = 72.0;
 const LABEL_HEIGHT: f32 = 16.0;
+/// Row icons are as tall as the label next to them.
+const ROW_ICON_SIZE: f32 = LABEL_HEIGHT;
+const ICON_GAP: f32 = 8.0;
 const VALUE_WIDTH: f32 = 60.0;
 const TRACK_OFFSET: f32 = 32.0;
 const TRACK_HEIGHT: f32 = 4.0;
@@ -21,9 +25,10 @@ const TOOLTIP_WIDTH: f32 = 300.0;
 const TOOLTIP_HEIGHT: f32 = 100.0;
 const TOOLTIP_GAP: f32 = 8.0;
 
-/// One monitor's row: name label, percentage value, slider track and its click area.
+/// One monitor's row: icon, name label, percentage value, slider track and its click area.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Row {
+    pub icon: Rect,
     pub label: Rect,
     pub value: Rect,
     pub track: Rect,
@@ -32,6 +37,7 @@ pub struct Row {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
+    pub title_icon: Rect,
     pub title: Rect,
     pub rows: Vec<Row>,
     pub status_bar: Rect,
@@ -58,14 +64,19 @@ impl Hit {
 /// Lays out a client area of `width` x `height` DIPs holding `row_count` monitors.
 pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
     let content_right = MARGIN + (width - 2.0 * MARGIN).max(1.0);
-    let title = rect(MARGIN, MARGIN, content_right, MARGIN + TITLE_HEIGHT);
+    let icon_top = MARGIN + (TITLE_HEIGHT - TITLE_ICON_SIZE) / 2.0;
+    let title_icon = rect(MARGIN, icon_top, MARGIN + TITLE_ICON_SIZE, icon_top + TITLE_ICON_SIZE);
+    let title_left = title_icon.right + ICON_GAP;
+    let title = rect(title_left, MARGIN, content_right.max(title_left), MARGIN + TITLE_HEIGHT);
 
     let first_row_top = MARGIN + HEADER_HEIGHT;
     let rows = (0..row_count)
         .map(|i| {
             let top = first_row_top + i as f32 * ROW_PITCH;
+            let icon = rect(MARGIN, top, MARGIN + ROW_ICON_SIZE, top + ROW_ICON_SIZE);
             let value = rect(content_right - VALUE_WIDTH, top, content_right, top + LABEL_HEIGHT);
-            let label = rect(MARGIN, top, value.left.max(MARGIN), top + LABEL_HEIGHT);
+            let label_left = icon.right + ICON_GAP;
+            let label = rect(label_left, top, value.left.max(label_left), top + LABEL_HEIGHT);
             let track_top = top + TRACK_OFFSET;
             let track = rect(MARGIN, track_top, content_right, track_top + TRACK_HEIGHT);
             // The click area spans the full window width for an easy target.
@@ -75,7 +86,7 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
                 width.max(track.right),
                 track.bottom + TRACK_HIT_PADDING,
             );
-            Row { label, value, track, hit }
+            Row { icon, label, value, track, hit }
         })
         .collect();
 
@@ -88,7 +99,7 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
         tooltip_bottom,
     );
 
-    Layout { title, rows, status_bar, tooltip }
+    Layout { title_icon, title, rows, status_bar, tooltip }
 }
 
 impl Layout {
@@ -146,12 +157,16 @@ mod tests {
         let layout = compute(400.0, 600.0, 4);
         assert_eq!(layout.rows.len(), 4);
         for row in &layout.rows {
+            assert!(row.icon.bottom <= row.hit.top);
+            assert!(row.icon.right <= row.label.left);
             assert!(row.label.bottom <= row.hit.top);
             assert!(row.value.bottom <= row.hit.top);
         }
         for pair in layout.rows.windows(2) {
             assert!(pair[0].hit.bottom <= pair[1].label.top);
         }
+        assert!(layout.title_icon.right <= layout.title.left);
+        assert!(layout.title_icon.bottom <= layout.rows[0].icon.top);
         assert!(layout.title.bottom <= layout.rows[0].label.top);
     }
 
@@ -174,7 +189,8 @@ mod tests {
         assert_eq!(row.value.right, 400.0 - MARGIN);
         assert_eq!(row.track.right, 400.0 - MARGIN);
         assert_eq!(row.label.right, row.value.left);
-        assert_eq!(row.label.left, MARGIN);
+        assert_eq!(row.icon.left, MARGIN);
+        assert_eq!(row.label.left, row.icon.right + ICON_GAP);
     }
 
     #[test]
@@ -207,6 +223,8 @@ mod tests {
 
         let (lx, ly) = center(&layout.rows[0].label);
         assert_eq!(layout.hit_test(lx, ly), None);
+        let (ix, iy) = center(&layout.rows[0].icon);
+        assert_eq!(layout.hit_test(ix, iy), None);
         let (hx, hy) = center(&layout.title);
         assert_eq!(layout.hit_test(hx, hy), None);
     }

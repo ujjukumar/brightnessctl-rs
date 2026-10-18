@@ -24,10 +24,11 @@
  ## ✨ Key Features
 
  *   **Zero Bloat:** Built with raw Win32 APIs, Direct2D, and DirectWrite. No Electron, no Qt, no WebViews, no .NET runtime.
- *   **Ultralight:** Release binary is **< 1 MB** (about 270 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
+ *   **Ultralight:** Release binary is **< 1 MB** (about 290 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
  *   **Instant Startup:** The window opens immediately. Monitors are detected in the background, so a slow monitor never holds up the UI.
  *   **Zero Idle CPU:** Nothing runs while you aren't using it: no polling, no periodic timers.
  *   **Native Windows Look & Feel:** Segoe UI, native title bar and menu, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling.
+ *   **Personal Touch:** Optional background picture behind the sliders, dimmed so the text stays readable, plus small built-in icons (monitor or laptop per display). The picture is shrunk to the window size, so even a large photo uses little memory.
  *   **Universal Display Support:**
      *   **Internal Displays:** Built-in laptop panels are controlled through WMI (`WmiMonitorBrightness`).
      *   **External Displays:** DDC/CI monitors are controlled through the Windows monitor API, falling back to raw VCP code `0x10`.
@@ -72,7 +73,8 @@
      *   **Click the percentage** to type a value. `Enter` or clicking elsewhere applies it; `Esc` cancels.
  3.  **View → Sync All Monitors (Lock)** moves every monitor by the same amount.
  4.  **View → Refresh Monitors** finds the displays again. This also happens automatically when a display is connected or disconnected.
- 5.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
+ 5.  **View → Background Image...** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **View → Remove Background** goes back to the plain theme color.
+ 6.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
 
  ---
 
@@ -87,8 +89,9 @@
      *   `CyclePresets` (Switch between configured levels)
  *   **Presets:** Brightness levels from 0 to 1, cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`).
  *   **Step Size:** The hotkey step (default `0.1` / 10%).
+ *   **Background:** `background_image` is the picture's full path (`null` for none; also set from the **View** menu). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
 
- `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. If the file can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
+ `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. The file may be saved with or without a UTF-8 byte order mark. If it can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
 
  ---
 
@@ -99,9 +102,10 @@
  *   **Language:** Rust 2024 Edition
  *   **Windowing & Event Loop:** Native Win32 API (`CreateWindowExW`, `GetMessageW`)
  *   **Hardware Acceleration:** Direct2D (geometry & shapes) + DirectWrite (typography), Per-Monitor DPI aware
+ *   **Pictures:** Windows Imaging Component (WIC), built into Windows, decodes the background on its own thread
  *   **Monitor Protocol:** `Dxva2` High-Level Monitor Configuration API and VCP `0x10` (DDC/CI); WMI for built-in panels
  *   **Monitor I/O:** One worker thread per monitor, so slow DDC/CI never blocks the window; rapid changes are coalesced to the latest value
- *   **State Management:** Event-driven, no polling; only one-shot timers (delayed save, display-change refresh)
+ *   **State Management:** Event-driven, no polling; only one-shot timers (delayed save, display-change refresh, background re-decode after a resize)
 
  ---
 
