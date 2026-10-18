@@ -17,6 +17,17 @@ pub enum ThemeMode {
     Auto,
 }
 
+impl ThemeMode {
+    /// Whether to draw dark; `Auto` follows Windows' app mode.
+    pub fn is_dark(self, system_dark: bool) -> bool {
+        match self {
+            ThemeMode::Dark => true,
+            ThemeMode::Light => false,
+            ThemeMode::Auto => system_dark,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MonitorState {
     pub brightness_value: u32,
@@ -86,14 +97,8 @@ impl Settings {
         self.monitor_states.insert(identity.composite_key(), state);
     }
 
-    pub fn is_dark_mode(&self) -> bool {
-        match self.theme {
-            ThemeMode::Dark => true,
-            ThemeMode::Light => false,
-            ThemeMode::Auto => Self::is_system_dark_mode(),
-        }
-    }
-
+    /// Whether Windows apps are set to dark mode. This reads the registry, so callers
+    /// keep the result and only read it again on `WM_SETTINGCHANGE`.
     pub fn is_system_dark_mode() -> bool {
         unsafe {
             let mut hkey = HKEY::default();
@@ -375,6 +380,14 @@ mod tests {
         assert_eq!(settings.theme, ThemeMode::Auto);
         assert!(!settings.presets.is_empty());
         assert!(settings.hotkeys.contains_key(&Action::StepUp));
+    }
+
+    #[test]
+    fn test_theme_auto_follows_system() {
+        assert!(!ThemeMode::Light.is_dark(true));
+        assert!(ThemeMode::Dark.is_dark(false));
+        assert!(ThemeMode::Auto.is_dark(true));
+        assert!(!ThemeMode::Auto.is_dark(false));
     }
 
     #[test]

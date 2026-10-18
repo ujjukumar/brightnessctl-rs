@@ -32,7 +32,7 @@ use windows::{
     Win32::System::LibraryLoader::GetModuleHandleW,
 };
 
-use crate::settings::Settings;
+use crate::settings::{Settings, ThemeMode};
 use crate::actions::Action;
 use crate::layout::Hit;
 
@@ -55,6 +55,8 @@ fn main() -> Result<()> {
 
         // Monitors are found after the window is up, so it appears without waiting on them.
         let (settings, config_warning) = Settings::load();
+        let system_dark = Settings::is_system_dark_mode();
+        let dark = settings.theme.is_dark(system_dark);
         APP_STATE = Some(AppState {
             monitors: Vec::new(),
             settings,
@@ -68,13 +70,14 @@ fn main() -> Result<()> {
             edit_buffer: String::new(),
             worker_generation: 0,
             settings_dirty: false,
+            system_dark,
         });
 
         RENDERER = Some(render::Renderer::new()?);
 
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
-        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu))?;
+        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu), dark)?;
         // Paint now; otherwise the first WM_PAINT would wait behind WM_APP_INIT.
         let _ = UpdateWindow(hwnd);
         debug_log!("window shown after {:?}", started.elapsed());
@@ -141,9 +144,27 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
     let hmenu = GetMenu(window);
     let theme = state.settings.theme;
     
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_AUTO as u32, if theme == crate::settings::ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_LIGHT as u32, if theme == crate::settings::ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_DARK as u32, if theme == crate::settings::ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_AUTO as u32, if theme == ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_LIGHT as u32, if theme == ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_DARK as u32, if theme == ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
+}
+
+unsafe fn set_theme(window: HWND, theme: ThemeMode) {
+    if let Some(state) = APP_STATE.as_mut() {
+        state.settings.theme = theme;
+        let _ = state.settings.save();
+        update_theme_menu(window, state);
+        window::set_dark_title_bar(window, state.is_dark());
+        state.status_message = format!("Theme set to {:?}", theme);
+        let _ = InvalidateRect(Some(window), None, false);
+    }
+}
+
+/// `lparam` of `WM_SETTINGCHANGE` names what changed; "ImmersiveColorSet" covers the
+/// light/dark app mode.
+unsafe fn is_color_set_change(lparam: LPARAM) -> bool {
+    let name = PCWSTR(lparam.0 as *const u16);
+    !name.is_null() && name.as_wide() == w!("ImmersiveColorSet").as_wide()
 }
 
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -205,33 +226,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                             let _ = InvalidateRect(Some(window), None, false);
                         }
                     }
-                    menu::IDM_THEME_AUTO => {
-                        if let Some(state) = APP_STATE.as_mut() {
-                            state.settings.theme = crate::settings::ThemeMode::Auto;
-                            let _ = state.settings.save();
-                            update_theme_menu(window, state);
-                            state.status_message = "Theme set to Auto".to_string();
-                            let _ = InvalidateRect(Some(window), None, false);
-                        }
-                    }
-                    menu::IDM_THEME_LIGHT => {
-                        if let Some(state) = APP_STATE.as_mut() {
-                            state.settings.theme = crate::settings::ThemeMode::Light;
-                            let _ = state.settings.save();
-                            update_theme_menu(window, state);
-                            state.status_message = "Theme set to Light".to_string();
-                            let _ = InvalidateRect(Some(window), None, false);
-                        }
-                    }
-                    menu::IDM_THEME_DARK => {
-                        if let Some(state) = APP_STATE.as_mut() {
-                            state.settings.theme = crate::settings::ThemeMode::Dark;
-                            let _ = state.settings.save();
-                            update_theme_menu(window, state);
-                            state.status_message = "Theme set to Dark".to_string();
-                            let _ = InvalidateRect(Some(window), None, false);
-                        }
-                    }
+                    menu::IDM_THEME_AUTO => set_theme(window, ThemeMode::Auto),
+                    menu::IDM_THEME_LIGHT => set_theme(window, ThemeMode::Light),
+                    menu::IDM_THEME_DARK => set_theme(window, ThemeMode::Dark),
                     menu::IDM_ABOUT => {
                         let _ = MessageBoxW(
                             Some(window),
@@ -246,6 +243,19 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             }
             // Direct2D paints the whole client area, so skip the erase that would flash first.
             WM_ERASEBKGND => LRESULT(1),
+            WM_SETTINGCHANGE => {
+                if is_color_set_change(lparam)
+                    && let Some(state) = APP_STATE.as_mut()
+                {
+                    let was_dark = state.is_dark();
+                    state.system_dark = Settings::is_system_dark_mode();
+                    if state.is_dark() != was_dark {
+                        window::set_dark_title_bar(window, state.is_dark());
+                        let _ = InvalidateRect(Some(window), None, false);
+                    }
+                }
+                DefWindowProcW(window, message, wparam, lparam)
+            }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(window, &mut ps);

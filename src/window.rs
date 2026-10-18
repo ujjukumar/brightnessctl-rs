@@ -1,6 +1,7 @@
 use windows::{
     core::*,
     Win32::Foundation::*,
+    Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE},
     Win32::Graphics::Gdi::*,
     Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
     Win32::UI::WindowsAndMessaging::*,
@@ -14,11 +15,26 @@ fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
 
+/// Draws the system title bar dark or light. The menu bar stays light either way.
+/// Fails harmlessly on Windows versions without the attribute.
+pub fn set_dark_title_bar(hwnd: HWND, dark: bool) {
+    let value = BOOL::from(dark);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &value as *const BOOL as *const std::ffi::c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+}
+
 pub unsafe fn create(
     instance: HINSTANCE, 
     title: &str, 
     wnd_proc: WNDPROC,
     menu: Option<HMENU>,
+    dark: bool,
 ) -> Result<HWND> {
     let class_name = w!("BrightnessCtlWindow");
     
@@ -85,6 +101,8 @@ pub unsafe fn create(
         rect.bottom - rect.top,
         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    // Before showing, so a dark window never flashes a light title bar.
+    set_dark_title_bar(hwnd, dark);
     let _ = ShowWindow(hwnd, SW_SHOW);
 
     Ok(hwnd)
@@ -111,7 +129,7 @@ mod tests {
     fn test_window_creation() {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
-            let result = create(instance, "Test Window", Some(test_wndproc), None);
+            let result = create(instance, "Test Window", Some(test_wndproc), None, false);
             assert!(result.is_ok(), "Window creation failed: {:?}", result.err());
             let hwnd = result.unwrap();
             assert!(!hwnd.0.is_null());

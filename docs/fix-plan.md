@@ -407,11 +407,16 @@ Tasks:
 
 - [x] **12. Flicker.** Handle `WM_ERASEBKGND` by returning 1. Remove `hbrBackground` (`window.rs:25`); that brush is also never freed.
   - *Result:* the window class has no background brush, and `WM_ERASEBKGND` returns 1. Direct2D already paints every pixel, so nothing is left unpainted (checked by screenshot after a resize).
-- [ ] **13. Theme.**
+- [x] **13. Theme.**
   - Turn on a dark title bar with `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` (add the `Win32_Graphics_Dwm` feature) and update it when the theme changes.
   - Remember the system dark-mode flag instead of reading the registry on every paint (`render.rs:203` → `settings.rs:95`).
   - Refresh the flag on `WM_SETTINGCHANGE` when `lParam` is `"ImmersiveColorSet"`.
   - The menu bar **stays light** (decision).
+  - *Result:*
+    - `window::set_dark_title_bar` is applied before the window is first shown, so a dark window never flashes a light title bar, and again on every theme change.
+    - The flag lives in `AppState.system_dark`. `ThemeMode::is_dark(system_dark)` is a pure function with a unit test, and `AppState::is_dark()` is what the renderer uses. `Settings::is_dark_mode` is gone.
+    - The three theme menu handlers became one `set_theme` helper.
+    - Checked by screenshot: the title bar is dark at startup and follows Light, Dark and Auto from the menu. A `WM_SETTINGCHANGE` "ImmersiveColorSet" sent to the window is handled without changing the registry.
 - [ ] **14. Brushes.** Stop creating `track_brush` and `accent_brush` on every paint (`render.rs:327,344`). Create them once and change their color with `SetColor` for hover and active states.
 - [ ] **15. Brightness math.**
   - Scale high-level API values to 0–100 using the min/max it returns (`brightness.rs:21-24`).

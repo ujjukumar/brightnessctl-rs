@@ -190,9 +190,16 @@ pub struct AppState {
     pub worker_generation: u16,
     /// A monitor the app wrote has state not yet saved to the config file.
     pub settings_dirty: bool,
+    /// Windows' app mode, read at startup and on `WM_SETTINGCHANGE`; `Auto` follows it.
+    pub system_dark: bool,
 }
 
 impl AppState {
+    /// Whether the window is drawn dark under the current theme setting.
+    pub fn is_dark(&self) -> bool {
+        self.settings.theme.is_dark(self.system_dark)
+    }
+
     /// Applies a result from the worker of monitor `idx`. Results from an older worker
     /// generation are ignored. Returns true if the monitor's label changed.
     pub fn handle_write_result(&mut self, generation: u16, idx: usize, result: WriteResult) -> bool {

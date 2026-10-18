@@ -160,6 +160,8 @@ Each row's label reads `<name> • <status>`. The name is the EDID manufacturer 
 
 ### Themes
 `Auto` (follows the Windows `AppsUseLightTheme` setting), `Light`, `Dark`. Changes apply immediately.
+- The system setting is read once at startup into `AppState.system_dark` and again on `WM_SETTINGCHANGE` with `"ImmersiveColorSet"`, never per paint. `AppState::is_dark()` resolves the theme.
+- The title bar follows the theme via `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` (`window::set_dark_title_bar`), set before the window is first shown. The menu bar stays light.
 
 ### Status bar
 A 24 px bar at the bottom with a separator line. It shows the last action, `SYNC ACTIVE` while sync mode is on, and `HOTKEY ERROR (n)` if any hotkeys failed to register.

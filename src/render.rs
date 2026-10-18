@@ -220,7 +220,7 @@ impl Renderer {
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
-            let is_dark = state.settings.is_dark_mode();
+            let is_dark = state.is_dark();
             if self.create_resources(hwnd, is_dark).is_err() {
                 self.discard_device_resources();
                 self.create_resources(hwnd, is_dark)?;
