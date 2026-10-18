@@ -417,7 +417,8 @@ Tasks:
     - The flag lives in `AppState.system_dark`. `ThemeMode::is_dark(system_dark)` is a pure function with a unit test, and `AppState::is_dark()` is what the renderer uses. `Settings::is_dark_mode` is gone.
     - The three theme menu handlers became one `set_theme` helper.
     - Checked by screenshot: the title bar is dark at startup and follows Light, Dark and Auto from the menu. A `WM_SETTINGCHANGE` "ImmersiveColorSet" sent to the window is handled without changing the registry.
-- [ ] **14. Brushes.** Stop creating `track_brush` and `accent_brush` on every paint (`render.rs:327,344`). Create them once and change their color with `SetColor` for hover and active states.
+- [x] **14. Brushes.** Stop creating `track_brush` and `accent_brush` on every paint (`render.rs:327,344`). Create them once and change their color with `SetColor` for hover and active states.
+  - *Result:* `brush_track` and `brush_fill` are created with the other brushes and dropped with them (theme change, device loss) through one `drop_brushes` helper. Paint no longer creates any brush, and nothing inside `BeginDraw`/`EndDraw` can return early with `?` any more. Checked by screenshot: an active slider is drawn lighter while the other row keeps the normal colors.
 - [ ] **15. Brightness math.**
   - Scale high-level API values to 0–100 using the min/max it returns (`brightness.rs:21-24`).
   - Round instead of truncating in VCP conversions (`brightness.rs:35,84`).

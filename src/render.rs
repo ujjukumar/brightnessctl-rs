@@ -73,6 +73,9 @@ pub struct Renderer {
     brush_fg: Option<ID2D1SolidColorBrush>,
     brush_accent: Option<ID2D1SolidColorBrush>,
     brush_subdued: Option<ID2D1SolidColorBrush>,
+    /// Slider track and fill; recolored per row with `SetColor` for hover and active.
+    brush_track: Option<ID2D1SolidColorBrush>,
+    brush_fill: Option<ID2D1SolidColorBrush>,
     current_theme_is_dark: Option<bool>,
     /// DPI the render target currently draws at; 0 when there is no render target.
     dpi: u32,
@@ -97,6 +100,8 @@ impl Renderer {
                 brush_fg: None,
                 brush_accent: None,
                 brush_subdued: None,
+                brush_track: None,
+                brush_fill: None,
                 current_theme_is_dark: None,
                 dpi: 0,
             })
@@ -109,10 +114,7 @@ impl Renderer {
         }
 
         if self.current_theme_is_dark != Some(is_dark) {
-             self.brush_bg = None;
-             self.brush_fg = None;
-             self.brush_accent = None;
-             self.brush_subdued = None;
+            self.drop_brushes();
         }
 
         let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
@@ -158,6 +160,12 @@ impl Renderer {
         if self.brush_subdued.is_none() {
             self.brush_subdued = Some(rt.CreateSolidColorBrush(&palette.subdued, None)?);
         }
+        if self.brush_track.is_none() {
+            self.brush_track = Some(rt.CreateSolidColorBrush(&palette.subdued, None)?);
+        }
+        if self.brush_fill.is_none() {
+            self.brush_fill = Some(rt.CreateSolidColorBrush(&palette.accent, None)?);
+        }
 
         if self.text_format_title.is_none() {
             self.text_format_title = Some(self.dw_factory.CreateTextFormat(
@@ -199,13 +207,19 @@ impl Renderer {
         Ok(())
     }
 
-    /// Drops everything tied to the GPU device. Text formats are device-independent and kept.
-    unsafe fn discard_device_resources(&mut self) {
-        self.render_target = None;
+    fn drop_brushes(&mut self) {
         self.brush_bg = None;
         self.brush_fg = None;
         self.brush_accent = None;
         self.brush_subdued = None;
+        self.brush_track = None;
+        self.brush_fill = None;
+    }
+
+    /// Drops everything tied to the GPU device. Text formats are device-independent and kept.
+    unsafe fn discard_device_resources(&mut self) {
+        self.render_target = None;
+        self.drop_brushes();
         self.dpi = 0;
     }
 
@@ -312,8 +326,9 @@ impl Renderer {
                 } else {
                     palette.subdued
                 };
-                let track_brush = rt.CreateSolidColorBrush(&track_color, None)?;
-                rt.FillRectangle(&row.track, &track_brush);
+                let track_brush = self.brush_track.as_ref().unwrap();
+                track_brush.SetColor(&track_color);
+                rt.FillRectangle(&row.track, track_brush);
 
                 if !monitor.ready {
                     continue;
@@ -328,8 +343,9 @@ impl Renderer {
                 } else {
                      palette.accent
                 };
-                let accent_brush = rt.CreateSolidColorBrush(&accent_color, None)?;
-                rt.FillRectangle(&fill_rect, &accent_brush);
+                let fill_brush = self.brush_fill.as_ref().unwrap();
+                fill_brush.SetColor(&accent_color);
+                rt.FillRectangle(&fill_rect, fill_brush);
 
                 // Thumb
                 let thumb_radius = if is_active { 10.0 } else if is_hovered { 9.0 } else { 8.0 };
