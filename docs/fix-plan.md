@@ -405,7 +405,8 @@ Tasks:
 
 ## Phase 6: Minor issues
 
-- [ ] **12. Flicker.** Handle `WM_ERASEBKGND` by returning 1. Remove `hbrBackground` (`window.rs:25`); that brush is also never freed.
+- [x] **12. Flicker.** Handle `WM_ERASEBKGND` by returning 1. Remove `hbrBackground` (`window.rs:25`); that brush is also never freed.
+  - *Result:* the window class has no background brush, and `WM_ERASEBKGND` returns 1. Direct2D already paints every pixel, so nothing is left unpainted (checked by screenshot after a resize).
 - [ ] **13. Theme.**
   - Turn on a dark title bar with `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` (add the `Win32_Graphics_Dwm` feature) and update it when the theme changes.
   - Remember the system dark-mode flag instead of reading the registry on every paint (`render.rs:203` → `settings.rs:95`).

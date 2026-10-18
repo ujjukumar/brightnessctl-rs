@@ -31,7 +31,8 @@ pub unsafe fn create(
         hInstance: instance,
         hIcon: LoadIconW(None, IDI_APPLICATION)?,
         hCursor: LoadCursorW(None, IDC_ARROW)?,
-        hbrBackground: CreateSolidBrush(COLORREF(0x1a1a1a)), 
+        // No background brush: Direct2D paints every pixel, and erasing first flickers.
+        hbrBackground: HBRUSH::default(),
         lpszMenuName: PCWSTR::null(),
         lpszClassName: class_name,
         hIconSm: HICON::default(),

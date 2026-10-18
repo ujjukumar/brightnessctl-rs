@@ -244,6 +244,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 }
                 LRESULT(0)
             }
+            // Direct2D paints the whole client area, so skip the erase that would flash first.
+            WM_ERASEBKGND => LRESULT(1),
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(window, &mut ps);
