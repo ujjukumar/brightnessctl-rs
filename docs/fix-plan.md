@@ -2,6 +2,8 @@
 
 This plan addresses every issue found in a full review of the codebase (written against commit `7e277cf`). The full project rules, architecture and behavior spec are in [`docs/AGENTS.md`](AGENTS.md); read that first. The constraints and decisions that matter most here are repeated below.
 
+**Status:** complete. All items are done (October 2026); each one has a *Result* note describing what was actually built. Figures quoted in the item descriptions (line numbers, sizes) are as of `7e277cf`.
+
 ## How to use this file
 
 - Work through the items **in order**. Some later items depend on earlier ones (noted inline).
@@ -488,10 +490,19 @@ Tasks:
     - Fixed the four points above. The configuration section also lists the default presets, the modifier values and the `monitor_states` field, and says to edit the file while the app is closed (the app rewrites it when it saves).
     - Usage now covers wheel steps (Shift for 1%), typed values, sync mode, automatic refresh on display changes, and the default hotkeys and which monitor they target.
     - Features: "system colors" was wrong (the app uses its own palette), so it now names what follows Windows: light/dark mode and the title bar. Added the EDID-based restore and the per-monitor worker threads, and linked `docs/AGENTS.md`.
-- [ ] **25. `docs/AGENTS.md`.** Bring it in line with the finished code:
+- [x] **25. `docs/AGENTS.md`.** Bring it in line with the finished code:
   - add `layout.rs`, `wmi.rs` and `worker.rs` to the module map and data flow,
   - remove every *(→ fix plan #N)* note whose item is done,
   - update the startup sequence (window first, then monitor detection),
   - record the final minimum write gap from item 6,
   - update the release binary size,
   - move anything learned while fixing (e.g. the confirmed WMI instance-name format) into the relevant section.
+  - *Result:*
+    - The module map, data flow, minimum gap (`MIN_IO_GAP`, 50 ms, item 9) and WMI instance-name format were already updated by the items that changed them. Every *(→ fix plan #N)* note is gone; the history table now says "fixed in #N", and the header says this plan is finished and kept as a record.
+    - Startup now lists the hidden create → DPI size → title-bar theme → show and paint order, and states that no monitor I/O happens before the first paint.
+    - Release size: 269,312 bytes after the audit fixes (221,696 before).
+    - Added what was learned while fixing: WMI workers use an MTA COM apartment; the config is read only at startup; the repo-root `brightnessctl.json` is the shipped default and must keep `monitor_states` empty; which window messages can be scripted (hover and wheel can't); `cargo test` doesn't rebuild the EXE; the 4th hardware test writes.
+    - Corrected small mismatches: a failed hotkey is retried only after a restart (there is no config reload), and the percentage sits at the right end of the row in a 60-DIP box.
+    - A history row for the audit records what's still open: laptop (WMI), high-DPI, device-loss and wheel checks by hand. `CLAUDE.md` no longer calls the fix plan active work.
+
+**Phase 8 measured:** release binary 269,312 bytes (documentation only; −512 bytes since Phase 6 from the clean-up in Phase 7).

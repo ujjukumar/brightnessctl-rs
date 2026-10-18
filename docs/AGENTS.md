@@ -2,7 +2,7 @@
 
 Reference for anyone (human or AI agent) working on this repository. This file replaces the former `GEMINI.md` and `conductor/` files.
 
-**Active work:** [`docs/fix-plan.md`](fix-plan.md). Read it before changing code. Where the current code doesn't match the rules below, the fix plan item that resolves it is noted as *(→ fix plan #N)*.
+**Audit fixes:** [`docs/fix-plan.md`](fix-plan.md) lists every problem found in the 2026 audit and how it was fixed (all items are done). Before changing an area, read the *Result* notes of the items that touched it.
 
 ---
 
@@ -64,7 +64,7 @@ codegen-units = 1
 incremental = false
 ```
 
-The release binary was 221,696 bytes (about 217 KB) at commit `7e277cf`. Check the size after any feature or dependency change.
+The release binary is 269,312 bytes (about 263 KB) after the audit fixes; it was 221,696 bytes at commit `7e277cf`, before them. Check the size after any feature or dependency change.
 
 ---
 
@@ -92,7 +92,7 @@ src/
 
 ### Data flow
 
-1. **Startup:** set up COM and DPI → load settings → create and paint the window (`UpdateWindow`) → post `WM_APP_INIT` → register hotkeys → message loop. `WM_APP_INIT` finds the monitors (registry and SetupDi only, about 2 ms) and starts one worker per monitor (`AppState::start_workers`). Each worker probes its monitor (`brightness::with_probed_backend`), applies Smart Restore, and reports `WM_APP_MONITOR_READY` (`AppState::handle_monitor_ready`). Until then the row shows `Detecting…` and ignores input (`Monitor::accepts_input`). Refresh Monitors uses the same path.
+1. **Startup:** set up COM and DPI → load settings → create the window hidden, size it for its monitor's DPI, set the title-bar theme, show and paint it (`UpdateWindow`) → post `WM_APP_INIT` → register hotkeys → message loop. No monitor I/O happens before the first paint. `WM_APP_INIT` finds the monitors (registry and SetupDi only, about 2 ms) and starts one worker per monitor (`AppState::start_workers`). Each worker probes its monitor (`brightness::with_probed_backend`), applies Smart Restore, and reports `WM_APP_MONITOR_READY` (`AppState::handle_monitor_ready`). Until then the row shows `Detecting…` and ignores input (`Monitor::accepts_input`). Refresh Monitors uses the same path.
 2. **Input** (mouse, wheel, keyboard, hotkeys, menu) changes `Monitor.ui_value`, then calls `AppState::request_brightness(targets)`. That posts the value to each target's worker, unless it is the value last sent.
 3. **Workers** write the newest value and read back the value that ends a burst. Every transaction (probe, write or read-back) starts at least `worker::MIN_IO_GAP` (50 ms) after the previous one ended (`worker::Pacer`); DDC/CI monitors reject commands sent sooner. Each result goes back to the window as `WM_APP_WRITE_DONE` (`Monitor::apply_write_result`).
 4. **Rendering only reads state.** It never changes anything.
@@ -148,7 +148,7 @@ Segoe UI only:
 - Custom-drawn sliders: a 4 px track, a filled part, and a round thumb.
 - Large hit targets.
 - Subtle hover and active feedback (lighter track, bigger thumb).
-- Percentage aligned right, above the track.
+- Percentage at the right end of the row, above the track (`layout::Row.value`, 60 DIPs wide).
 
 ### Monitor labels
 Each row's label reads `<name> • <status>`. The name is the EDID manufacturer and serial (or the Windows description if there's no EDID). The status comes from `Monitor::status_label`:
@@ -212,7 +212,7 @@ Shown when hovering over a row: name, hardware range, device path, and EDID manu
 The backend is chosen **once per monitor** by its worker (`brightness::with_probed_backend`, reported as `Monitor.backend`), not tried again on every write.
 
 **WMI notes:**
-- WMI is connected lazily, only when a monitor fails both Dxva2 paths.
+- WMI is connected lazily, only when a monitor fails both Dxva2 paths. The worker initializes COM as MTA for it; the window thread stays STA.
 - A WMI `InstanceName` is the device instance ID plus `_0` (`wmi::instance_matches`).
 - `CoSetProxyBlanket` must receive the interface proxy itself (`IWbemServices`, `IEnumWbemClassObject`), never a cast `IUnknown`. Otherwise every call fails with `WBEM_E_ACCESS_DENIED`.
 
@@ -259,7 +259,7 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
   | `Ctrl+Alt+P` | Cycle Presets |
 
 - `Action` values (`StepUp = 1`, `StepDown = 2`, `CyclePresets = 3`) are used as the `RegisterHotKey` IDs.
-- **Registration failures:** that hotkey is disabled, the failure shows in the status bar, and it isn't retried until restart or a config change.
+- **Registration failures:** that hotkey is disabled, the failure shows in the status bar, and it isn't retried until the app restarts.
 - Hotkeys are unregistered on exit (`HotkeyManager::unregister_all` in `WM_DESTROY`).
 
 **Targeting** (hotkeys):
@@ -310,7 +310,9 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 
 ## 6. Configuration: `brightnessctl.json`
 
-Stored **next to the EXE** (`Settings::default_path`), whatever the working directory. It's created with defaults on first run. Saves are atomic: the app writes `brightnessctl.json.tmp`, then renames it over the real file.
+Stored **next to the EXE** (`Settings::default_path`), whatever the working directory. It's created with defaults on first run and read only at startup, so edits made while the app runs are lost at its next save. Saves are atomic: the app writes `brightnessctl.json.tmp`, then renames it over the real file.
+
+The repo-root `brightnessctl.json` is the default config shipped in the release zip. Keep its `monitor_states` empty.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -360,18 +362,20 @@ then publishes a GitHub Release with generated notes.
 
 | Machine | Displays | Use for |
 |---|---|---|
-| Desktop | Gigabyte `GBT2402` + Acer `ACR0B96`, both external DDC/CI | DDC/CI and sync mode |
-| Laptop | Acer Aspire built-in panel | WMI, high-DPI scaling, hybrid-graphics device loss |
+| Desktop | Gigabyte `GBT2402` + Acer `ACR0B96`, both external DDC/CI (`HighLevel`, 0–100) | DDC/CI and sync mode |
+| Laptop | Acer Aspire built-in panel | WMI, high-DPI scaling, hybrid-graphics device loss (not yet checked on this machine) |
 
 Useful checks:
 
 ```powershell
-cargo test -- --ignored --nocapture --test-threads=1   # read-only hardware tests: identities, WMI matching, backend probe
+cargo test -- --ignored --nocapture --test-threads=1   # hardware tests: identities, WMI matching, backend probe (read-only), and a worker test that rewrites each monitor's current value
 Get-PnpDevice -Class Monitor -PresentOnly | Select InstanceId, FriendlyName
 Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness
 ```
 
 - Win+Ctrl+Shift+B restarts the graphics driver, which is useful for testing device-loss handling.
+- `cargo test` doesn't rebuild the app's EXE; run `cargo build` before testing it by hand.
+- Clicks, drags (`WM_MOUSEMOVE` with `MK_LBUTTON`), typed characters, menu commands (`WM_COMMAND`), `WM_SETTINGCHANGE` and `WM_DISPLAYCHANGE` can be posted to the window from a script. Hover and the wheel can't: `TrackMouseEvent` posts `WM_MOUSELEAVE` as soon as the real cursor is outside the window, so test those by hand.
 
 ---
 
@@ -381,9 +385,9 @@ Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness
 - Use conventional commits: `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, e.g. `fix(monitors): match EDID by device instance ID`.
 - Write unit tests alongside changes for any logic that can be tested on its own. Move logic out of Win32 handlers into pure functions so it can be tested.
 - Mark tests that need real monitors with `#[ignore]`.
-- Before committing, `cargo build`, `cargo test` and `cargo clippy` must all pass with no warnings.
+- Before committing, `cargo build`, `cargo test` and `cargo clippy --all-targets --locked -- -D warnings` must all pass.
 - Check the release size after feature or dependency changes.
-- Keep `docs/fix-plan.md` checkboxes up to date, and update this file when rules or architecture change.
+- Plan multi-step work in a file under `docs/` with checkboxes and a *Result* note per item, like `fix-plan.md`. Update this file when rules or architecture change.
 
 ### Code style
 
@@ -395,17 +399,20 @@ Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBrightness
 
 ---
 
-## 9. History (summary of retired `conductor/` tracks)
+## 9. History
+
+Earlier work was tracked in `conductor/` (retired); the "fixed in #N" notes refer to `docs/fix-plan.md`.
 
 | Track | Date | Delivered | Not delivered / known gaps |
 |---|---|---|---|
-| core_refinement | 2025-12-21 | Win32 window and DPI init, monitor enumeration, Direct2D/DirectWrite setup, basic hit-testing | Rendering doesn't handle DPI correctly (→ #3) |
+| core_refinement | 2025-12-21 | Win32 window and DPI init, monitor enumeration, Direct2D/DirectWrite setup, basic hit-testing | Rendering didn't handle DPI correctly (fixed in #3) |
 | fix_warnings | 2025-12-21 | Removed unused fields (`hmonitor`, `hot_monitor`) | `hmonitor` was later re-added for cursor-based hotkey targeting |
 | ui_polish | 2025-12-21 | Settings JSON, native menu, Light/Dark/Auto themes, responsive layout, status bar, hover/active slider states | Window position not saved (optional); status messages don't auto-clear; no color transitions |
-| monitor_identity | 2025-12-22 | EDID identity and composite key, persistence model, rate limit and backoff, Smart Restore, sync mode, tooltips, status labels | EDID lookup never matched, so saving and restoring never worked (→ #1); connection-type label (HDMI/DP/USB-C) not built; observed min/max recorded but unused; manual checks for phases 1–3 never done |
-| enhanced_input | 2025-12-22 | Global hotkeys, mouse wheel, typed values, preset cycling, hotkey failure indicator | Focus loss doesn't commit a typed value (→ #10); wheel and hotkey writes can be dropped (→ #6); promised tests for wheel and typed values missing (→ #10, #23) |
+| monitor_identity | 2025-12-22 | EDID identity and composite key, persistence model, rate limit and backoff, Smart Restore, sync mode, tooltips, status labels | EDID lookup never matched, so saving and restoring never worked (fixed in #1); connection-type label (HDMI/DP/USB-C) not built; observed min/max recorded but unused (used since #15); manual checks for phases 1–3 never done |
+| enhanced_input | 2025-12-22 | Global hotkeys, mouse wheel, typed values, preset cycling, hotkey failure indicator | Focus loss didn't commit a typed value (fixed in #10); wheel and hotkey writes could be dropped (fixed in #6); promised tests for wheel and typed values missing (fixed in #10, #23) |
+| audit fixes (`docs/fix-plan.md`) | 2026-10 | EDID matching, DPI-correct layout, WMI backend, per-monitor worker threads, safe config, debounced saves, device-loss recovery, startup before monitor I/O, typed-value commit, status labels, flicker-free paint, dark title bar, brightness range math, hotkey cleanup, automatic refresh, window-owned state, clippy in CI | Laptop (WMI), high-DPI, device-loss and wheel checks still to be done by hand |
 
-## 10. Roadmap (after the fix plan)
+## 10. Roadmap
 
 - System tray icon for quick access.
 - Master slider: all monitors in unison. Sync mode partly covers this.

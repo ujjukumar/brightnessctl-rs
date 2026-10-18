@@ -2,6 +2,6 @@
 
 Project rules, architecture, and behavior spec live in `docs/AGENTS.md` (imported below).
 
-Active work is tracked in `docs/fix-plan.md`. Read it before changing code, work through the items in order, and keep its checkboxes up to date.
+The audit fix plan in `docs/fix-plan.md` is complete; its *Result* notes explain why the code looks the way it does. Plan new multi-step work the same way (see `docs/AGENTS.md` §8).
 
 @docs/AGENTS.md
