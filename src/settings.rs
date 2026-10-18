@@ -9,6 +9,8 @@ use crate::state::MonitorIdentity;
 use crate::actions::Action;
 
 const CONFIG_FILE_NAME: &str = "brightnessctl.json";
+/// Folder under `%APPDATA%` that holds the config.
+const CONFIG_DIR_NAME: &str = "brightnessctl";
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum ThemeMode {
@@ -129,18 +131,24 @@ impl Settings {
         true // Default to dark if detection fails
     }
 
-    /// `brightnessctl.json` next to the executable, so the config travels with a
-    /// portable install no matter which directory the app is started from.
+    /// `%APPDATA%\brightnessctl\brightnessctl.json`. Falls back to the executable's
+    /// folder if `APPDATA` isn't set.
     pub fn default_path() -> PathBuf {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join(CONFIG_FILE_NAME)))
-            .unwrap_or_else(|| PathBuf::from(CONFIG_FILE_NAME))
+        let dir = match std::env::var_os("APPDATA") {
+            Some(appdata) if !appdata.is_empty() => PathBuf::from(appdata).join(CONFIG_DIR_NAME),
+            _ => exe_dir().unwrap_or_default(),
+        };
+        dir.join(CONFIG_FILE_NAME)
     }
 
-    /// Loads the config next to the executable. See `load_from`.
+    /// Loads the config from `default_path`, first moving one that an older version
+    /// left next to the executable. See `load_from`.
     pub fn load() -> (Self, Option<String>) {
-        Self::load_from(&Self::default_path())
+        let path = Self::default_path();
+        let moved = exe_dir().is_some_and(|dir| move_legacy_config(&dir.join(CONFIG_FILE_NAME), &path));
+        let (settings, warning) = Self::load_from(&path);
+        let notice = moved.then(|| format!("Settings moved to %APPDATA%\\{CONFIG_DIR_NAME}"));
+        (settings, warning.or(notice))
     }
 
     /// Loads settings from `path`, returning a status warning if the file had to be replaced.
@@ -178,15 +186,18 @@ impl Settings {
         }
     }
 
-    /// Saves to the config next to the executable.
+    /// Saves to `default_path`.
     pub fn save(&self) -> io::Result<()> {
         self.save_to(&Self::default_path())
     }
 
     /// Writes a temporary file and renames it over `path`, so a crash mid-write
-    /// can't leave a truncated config behind.
+    /// can't leave a truncated config behind. Creates the folder if it's missing.
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
         let content = serde_json::to_string_pretty(self)?;
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, content)?;
         fs::rename(&tmp, path)
@@ -208,6 +219,34 @@ fn backup_path(path: &Path) -> PathBuf {
     path.with_extension("json.bak")
 }
 
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+}
+
+/// Moves a config (and its `.bak`) that older versions kept next to the executable to
+/// `path`. Does nothing once `path` exists. Returns whether the config was moved.
+fn move_legacy_config(legacy: &Path, path: &Path) -> bool {
+    if path.exists() || !legacy.is_file() {
+        return false;
+    }
+    let moved = move_file(legacy, path).is_ok();
+    if moved && backup_path(legacy).is_file() && !backup_path(path).exists() {
+        let _ = move_file(&backup_path(legacy), &backup_path(path));
+    }
+    moved
+}
+
+/// Copies then deletes, since `fs::rename` can't move across drives. If the old file
+/// can't be deleted (a read-only folder), the copy is still used.
+fn move_file(from: &Path, to: &Path) -> io::Result<()> {
+    if let Some(dir) = to.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::copy(from, to)?;
+    let _ = fs::remove_file(from);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,11 +261,51 @@ mod tests {
     }
 
     #[test]
-    fn test_default_path_is_next_to_exe() {
+    fn test_default_path_is_in_appdata() {
         let path = Settings::default_path();
         assert_eq!(path.file_name().unwrap(), CONFIG_FILE_NAME);
-        let exe = std::env::current_exe().unwrap();
-        assert_eq!(path.parent(), exe.parent());
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            assert_eq!(path, PathBuf::from(appdata).join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME));
+        }
+    }
+
+    #[test]
+    fn test_save_creates_missing_folders() {
+        let path = test_dir("folders").join("a").join("b").join(CONFIG_FILE_NAME);
+        Settings::default().save_to(&path).unwrap();
+        assert_eq!(Settings::load_from(&path), (Settings::default(), None));
+    }
+
+    #[test]
+    fn test_legacy_config_and_backup_are_moved() {
+        let dir = test_dir("legacy-move");
+        let legacy = dir.join("exe").join(CONFIG_FILE_NAME);
+        let path = dir.join("appdata").join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, r#"{ "theme": "Light" }"#).unwrap();
+        fs::write(backup_path(&legacy), "old backup").unwrap();
+
+        assert!(move_legacy_config(&legacy, &path));
+        assert!(!legacy.exists() && !backup_path(&legacy).exists());
+        assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), "old backup");
+        assert_eq!(Settings::load_from(&path).0.theme, ThemeMode::Light);
+    }
+
+    #[test]
+    fn test_legacy_config_never_replaces_an_existing_one() {
+        let dir = test_dir("legacy-keep");
+        let legacy = dir.join("legacy.json");
+        let path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&legacy, r#"{ "theme": "Light" }"#).unwrap();
+        fs::write(&path, r#"{ "theme": "Dark" }"#).unwrap();
+
+        assert!(!move_legacy_config(&legacy, &path));
+        assert!(legacy.exists());
+        assert_eq!(Settings::load_from(&path).0.theme, ThemeMode::Dark);
+
+        // Nothing to move.
+        assert!(!move_legacy_config(&dir.join("missing.json"), &dir.join("new.json")));
+        assert!(!dir.join("new.json").exists());
     }
 
     #[test]
