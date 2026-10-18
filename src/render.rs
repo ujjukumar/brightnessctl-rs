@@ -5,7 +5,9 @@ use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::{
     ID2D1Bitmap,
     ID2D1Factory,
+    ID2D1GradientStopCollection,
     ID2D1HwndRenderTarget,
+    ID2D1LinearGradientBrush,
     ID2D1RenderTarget,
     ID2D1SolidColorBrush,
     D2D1CreateFactory,
@@ -13,18 +15,26 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_PROPERTIES,
     D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_NONE,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED,
     D2D1_COLOR_F,
+    D2D1_GRADIENT_STOP,
     D2D1_PIXEL_FORMAT,
     D2D_SIZE_U,
     D2D_RECT_F,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Graphics::Direct2D::{D2D1_ELLIPSE, D2D1_ROUNDED_RECT};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+    D2D1_ELLIPSE,
+    D2D1_EXTEND_MODE_CLAMP,
+    D2D1_GAMMA_2_2,
+    D2D1_ROUNDED_RECT,
+};
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory,
     IDWriteTextFormat,
@@ -42,30 +52,93 @@ use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
 use crate::state::Backend;
 use crate::background::{self, Picture};
+use crate::settings::ThemeMode;
+
+/// Which look to draw. `Auto` picks `Dark` or `Light`, while `Glass` is a look of its own
+/// with a gradient and translucent panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeStyle {
+    Dark,
+    Light,
+    Glass,
+}
+
+impl ThemeStyle {
+    fn of(state: &AppState) -> Self {
+        if state.settings.theme == ThemeMode::Glass {
+            ThemeStyle::Glass
+        } else if state.is_dark() {
+            ThemeStyle::Dark
+        } else {
+            ThemeStyle::Light
+        }
+    }
+
+    /// Whether panels and the gradient are drawn. Their colors exist for every style, so
+    /// the rest of the code doesn't need to special-case the theme.
+    fn has_cards(self) -> bool {
+        self == ThemeStyle::Glass
+    }
+}
 
 pub struct ColorPalette {
     pub bg: D2D1_COLOR_F,
+    /// Second stop of the background gradient; the same as `bg` for the flat themes.
+    pub bg_alt: D2D1_COLOR_F,
     pub fg: D2D1_COLOR_F,
     pub accent: D2D1_COLOR_F,
     pub subdued: D2D1_COLOR_F,
+    /// Fill and outline of the panels behind the rows and the status bar.
+    pub card: D2D1_COLOR_F,
+    pub border: D2D1_COLOR_F,
 }
 
 impl ColorPalette {
     pub fn dark() -> Self {
+        let bg = D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 };
         Self {
-            bg: D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
+            bg,
+            bg_alt: bg,
             fg: D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
             accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
             subdued: D2D1_COLOR_F { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
+            card: bg,
+            border: bg,
         }
     }
 
     pub fn light() -> Self {
+        let bg = D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 };
         Self {
-            bg: D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
+            bg,
+            bg_alt: bg,
             fg: D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
             accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
             subdued: D2D1_COLOR_F { r: 0.4, g: 0.4, b: 0.4, a: 1.0 },
+            card: bg,
+            border: bg,
+        }
+    }
+
+    /// Cream fading into warm peach, with translucent white panels over it. The text
+    /// colors stay dark enough to read on the lightest part of the gradient.
+    pub fn glass() -> Self {
+        Self {
+            bg: D2D1_COLOR_F { r: 0.99, g: 0.97, b: 0.93, a: 1.0 },
+            bg_alt: D2D1_COLOR_F { r: 0.98, g: 0.91, b: 0.85, a: 1.0 },
+            fg: D2D1_COLOR_F { r: 0.20, g: 0.16, b: 0.13, a: 1.0 },
+            accent: D2D1_COLOR_F { r: 0.80, g: 0.40, b: 0.12, a: 1.0 },
+            subdued: D2D1_COLOR_F { r: 0.42, g: 0.36, b: 0.31, a: 1.0 },
+            card: D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.45 },
+            border: D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.75 },
+        }
+    }
+
+    fn of(style: ThemeStyle) -> Self {
+        match style {
+            ThemeStyle::Dark => Self::dark(),
+            ThemeStyle::Light => Self::light(),
+            ThemeStyle::Glass => Self::glass(),
         }
     }
 }
@@ -84,12 +157,20 @@ pub struct Renderer {
     /// Slider track and fill; recolored per row with `SetColor` for hover and active.
     brush_track: Option<ID2D1SolidColorBrush>,
     brush_fill: Option<ID2D1SolidColorBrush>,
-    current_theme_is_dark: Option<bool>,
+    /// Panel fill and outline, used by the glass theme.
+    brush_card: Option<ID2D1SolidColorBrush>,
+    brush_border: Option<ID2D1SolidColorBrush>,
+    /// Background gradient, built only for the glass theme.
+    gradient_stops: Option<ID2D1GradientStopCollection>,
+    brush_gradient: Option<ID2D1LinearGradientBrush>,
+    current_style: Option<ThemeStyle>,
     /// DPI the render target currently draws at; 0 when there is no render target.
     dpi: u32,
-    /// The decoded background picture, kept so the bitmap can be rebuilt after a device loss.
+    /// The decoded background picture, kept so the bitmaps can be rebuilt after a device loss.
     background: Option<Picture>,
     background_bitmap: Option<ID2D1Bitmap>,
+    /// Blurred copy of the picture, shown through the glass panels.
+    background_blur_bitmap: Option<ID2D1Bitmap>,
 }
 
 impl Renderer {
@@ -113,24 +194,29 @@ impl Renderer {
                 brush_subdued: None,
                 brush_track: None,
                 brush_fill: None,
-                current_theme_is_dark: None,
+                brush_card: None,
+                brush_border: None,
+                gradient_stops: None,
+                brush_gradient: None,
+                current_style: None,
                 dpi: 0,
                 background: None,
                 background_bitmap: None,
+                background_blur_bitmap: None,
             })
         }
     }
 
-    unsafe fn create_resources(&mut self, hwnd: HWND, is_dark: bool) -> Result<()> {
-        if self.render_target.is_some() && self.current_theme_is_dark == Some(is_dark) {
+    unsafe fn create_resources(&mut self, hwnd: HWND, style: ThemeStyle) -> Result<()> {
+        if self.render_target.is_some() && self.current_style == Some(style) {
             return Ok(());
         }
 
-        if self.current_theme_is_dark != Some(is_dark) {
+        if self.current_style != Some(style) {
             self.drop_brushes();
         }
 
-        let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
+        let palette = ColorPalette::of(style);
 
         if self.render_target.is_none() {
             let mut rect = RECT::default();
@@ -179,6 +265,34 @@ impl Renderer {
         if self.brush_fill.is_none() {
             self.brush_fill = Some(rt.CreateSolidColorBrush(&palette.accent, None)?);
         }
+        if self.brush_card.is_none() {
+            self.brush_card = Some(rt.CreateSolidColorBrush(&palette.card, None)?);
+        }
+        if self.brush_border.is_none() {
+            self.brush_border = Some(rt.CreateSolidColorBrush(&palette.border, None)?);
+        }
+        if style.has_cards() && self.gradient_stops.is_none() {
+            let stops = [
+                D2D1_GRADIENT_STOP { position: 0.0, color: palette.bg },
+                D2D1_GRADIENT_STOP { position: 1.0, color: palette.bg_alt },
+            ];
+            self.gradient_stops = Some(rt.CreateGradientStopCollection(
+                &stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            )?);
+        }
+        if self.brush_gradient.is_none()
+            && let Some(stops) = &self.gradient_stops
+        {
+            // The points are set from the client size before every paint.
+            let properties = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: Vector2 { X: 0.0, Y: 0.0 },
+                endPoint: Vector2 { X: 1.0, Y: 1.0 },
+            };
+            let brush = rt.CreateLinearGradientBrush(&properties, None, stops)?;
+            self.brush_gradient = Some(brush);
+        }
 
         if self.text_format_title.is_none() {
             self.text_format_title = Some(self.dw_factory.CreateTextFormat(
@@ -216,7 +330,7 @@ impl Renderer {
             )?);
         }
 
-        self.current_theme_is_dark = Some(is_dark);
+        self.current_style = Some(style);
         Ok(())
     }
 
@@ -227,6 +341,10 @@ impl Renderer {
         self.brush_subdued = None;
         self.brush_track = None;
         self.brush_fill = None;
+        self.brush_card = None;
+        self.brush_border = None;
+        self.brush_gradient = None;
+        self.gradient_stops = None;
     }
 
     /// Drops everything tied to the GPU device. Text formats are device-independent and kept.
@@ -234,6 +352,7 @@ impl Renderer {
         self.render_target = None;
         self.drop_brushes();
         self.background_bitmap = None;
+        self.background_blur_bitmap = None;
         self.dpi = 0;
     }
 
@@ -241,6 +360,7 @@ impl Renderer {
     pub fn set_background(&mut self, picture: Option<Picture>) {
         self.background = picture;
         self.background_bitmap = None;
+        self.background_blur_bitmap = None;
     }
 
     /// Whether the background (if any) is big enough for a client of `width` x `height` pixels.
@@ -259,10 +379,10 @@ impl Renderer {
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
-            let is_dark = state.is_dark();
-            if self.create_resources(hwnd, is_dark).is_err() {
+            let style = ThemeStyle::of(state);
+            if self.create_resources(hwnd, style).is_err() {
                 self.discard_device_resources();
-                self.create_resources(hwnd, is_dark)?;
+                self.create_resources(hwnd, style)?;
             }
 
             let rt_hwnd = self.render_target.as_ref().unwrap();
@@ -278,8 +398,15 @@ impl Renderer {
             // GetSize reports DIPs, matching what input handling computes from pixels.
             let size = rt.GetSize();
             let layout = layout::compute(size.width, size.height, state.monitors.len());
+            let window_rect = D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: size.width,
+                bottom: size.height,
+            };
+            let dim = 1.0 - state.settings.background_dim;
 
-            let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
+            let palette = ColorPalette::of(style);
 
             if self.background_bitmap.is_none()
                 && let Some(picture) = &self.background
@@ -293,28 +420,35 @@ impl Renderer {
                     dpiX: 96.0,
                     dpiY: 96.0,
                 };
+                let bitmap_size = D2D_SIZE_U { width: picture.width, height: picture.height };
+                let pitch = picture.width * 4;
                 self.background_bitmap = rt
-                    .CreateBitmap(
-                        D2D_SIZE_U { width: picture.width, height: picture.height },
-                        Some(picture.pixels.as_ptr().cast()),
-                        picture.width * 4,
-                        &properties,
-                    )
+                    .CreateBitmap(bitmap_size, Some(picture.pixels.as_ptr().cast()), pitch, &properties)
+                    .ok();
+                self.background_blur_bitmap = rt
+                    .CreateBitmap(bitmap_size, Some(picture.blurred.as_ptr().cast()), pitch, &properties)
                     .ok();
             }
 
             rt.BeginDraw();
-            rt.Clear(Some(&palette.bg));
+            if style.has_cards() {
+                // Cream at the top left fading to warm peach at the bottom right.
+                let gradient = self.brush_gradient.as_ref().unwrap();
+                gradient.SetStartPoint(Vector2 { X: window_rect.left, Y: window_rect.top });
+                gradient.SetEndPoint(Vector2 { X: window_rect.right, Y: window_rect.bottom });
+                rt.FillRectangle(&window_rect, gradient);
+            } else {
+                rt.Clear(Some(&palette.bg));
+            }
 
             // Drawn faded over the theme color, which works as the dim layer.
             if let Some(bitmap) = &self.background_bitmap {
                 let picture = bitmap.GetSize();
                 let source = background::crop(picture.width, picture.height, size.width, size.height);
-                let window = D2D_RECT_F { left: 0.0, top: 0.0, right: size.width, bottom: size.height };
                 rt.DrawBitmap(
                     bitmap,
-                    Some(&window),
-                    1.0 - state.settings.background_dim,
+                    Some(&window_rect),
+                    dim,
                     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                     Some(&source),
                 );
@@ -334,6 +468,14 @@ impl Renderer {
             );
 
             for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
+                if style.has_cards() {
+                    // The picture shows through the panel, blurred, like frosted glass.
+                    self.draw_frosted(&rt, &row.card, &window_rect, dim);
+                    let card = card_rect(&row.card);
+                    rt.FillRoundedRectangle(&card, self.brush_card.as_ref().unwrap());
+                    rt.DrawRoundedRectangle(&card, self.brush_border.as_ref().unwrap(), 1.0, None);
+                }
+
                 // Laptop panels are the ones driven through WMI.
                 let icon_brush = self.brush_subdued.as_ref().unwrap();
                 if monitor.backend == Backend::Wmi {
@@ -436,14 +578,22 @@ impl Renderer {
             // Status Bar at the bottom
             let status_rect = layout.status_bar;
             
-            // Subtle separator line
-            rt.DrawLine(
-                Vector2 { X: status_rect.left, Y: status_rect.top },
-                Vector2 { X: status_rect.right, Y: status_rect.top },
-                self.brush_subdued.as_ref().unwrap(),
-                1.0,
-                None,
-            );
+            if style.has_cards() {
+                // The status bar sits on a panel of its own instead of a plain line.
+                self.draw_frosted(&rt, &layout.status_card, &window_rect, dim);
+                let card = card_rect(&layout.status_card);
+                rt.FillRoundedRectangle(&card, self.brush_card.as_ref().unwrap());
+                rt.DrawRoundedRectangle(&card, self.brush_border.as_ref().unwrap(), 1.0, None);
+            } else {
+                // Subtle separator line
+                rt.DrawLine(
+                    Vector2 { X: status_rect.left, Y: status_rect.top },
+                    Vector2 { X: status_rect.right, Y: status_rect.top },
+                    self.brush_subdued.as_ref().unwrap(),
+                    1.0,
+                    None,
+                );
+            }
 
             let mut status_msg = state.status_message.clone();
             if state.lock_mode {
@@ -516,6 +666,40 @@ impl Renderer {
             }
             Ok(())
         }
+    }
+
+    /// Draws the blurred copy of the picture, cropped exactly like the sharp one, clipped to
+    /// `area`, so a panel shows whatever is behind it as frosted glass.
+    unsafe fn draw_frosted(
+        &self,
+        rt: &ID2D1RenderTarget,
+        area: &D2D_RECT_F,
+        window: &D2D_RECT_F,
+        opacity: f32,
+    ) {
+        let Some(bitmap) = &self.background_blur_bitmap else {
+            return;
+        };
+        let picture = bitmap.GetSize();
+        let source = background::crop(picture.width, picture.height, window.right, window.bottom);
+        rt.PushAxisAlignedClip(area, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        rt.DrawBitmap(
+            bitmap,
+            Some(window),
+            opacity,
+            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+            Some(&source),
+        );
+        rt.PopAxisAlignedClip();
+    }
+}
+
+/// A panel outline: the rectangle with the theme's corner radius.
+fn card_rect(area: &D2D_RECT_F) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: *area,
+        radiusX: layout::CARD_RADIUS,
+        radiusY: layout::CARD_RADIUS,
     }
 }
 

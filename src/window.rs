@@ -1,7 +1,10 @@
 use windows::{
     core::*,
     Win32::Foundation::*,
-    Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE},
+    Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_ROUND,
+    },
     Win32::Graphics::Gdi::*,
     Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
     Win32::UI::WindowsAndMessaging::*,
@@ -28,6 +31,20 @@ pub fn set_dark_title_bar(hwnd: HWND, dark: bool) {
             DWMWA_USE_IMMERSIVE_DARK_MODE,
             &value as *const BOOL as *const std::ffi::c_void,
             std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+}
+
+/// Rounds the window's corners on Windows 11; on Windows 10 the attribute is
+/// unknown and the call fails harmlessly, leaving square corners.
+pub fn set_round_corners(hwnd: HWND) {
+    let value = DWMWCP_ROUND;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &value as *const _ as *const std::ffi::c_void,
+            std::mem::size_of_val(&value) as u32,
         );
     }
 }
@@ -108,6 +125,7 @@ pub unsafe fn create(
     );
     // Before showing, so a dark window never flashes a light title bar.
     set_dark_title_bar(hwnd, dark);
+    set_round_corners(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
 
     Ok(hwnd)
