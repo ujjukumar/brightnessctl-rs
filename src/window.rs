@@ -11,6 +11,9 @@ use windows::{
 const CLIENT_WIDTH: i32 = 384;
 const CLIENT_HEIGHT: i32 = 544;
 
+/// The main window's class; a second launch finds the running window by it.
+pub const CLASS_NAME: PCWSTR = w!("BrightnessCtlWindow");
+
 fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
@@ -38,7 +41,7 @@ pub unsafe fn create(
     dark: bool,
     param: Option<*const std::ffi::c_void>,
 ) -> Result<HWND> {
-    let class_name = w!("BrightnessCtlWindow");
+    let class_name = CLASS_NAME;
     
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,

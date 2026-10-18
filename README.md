@@ -65,7 +65,7 @@
 
  ## 🎮 Usage
 
- 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed.
+ 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward.
  2.  Adjust brightness:
      *   **Drag** or click a slider.
      *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
