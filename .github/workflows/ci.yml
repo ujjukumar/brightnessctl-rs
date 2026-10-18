@@ -6,16 +6,25 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   check-and-test:
+    # The name is the required status check in the "Protect main" ruleset; rename both together.
     name: Check, Test & Build
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: actions/checkout@v7
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -23,10 +32,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
-
-      - name: Cargo check
-        run: cargo check --locked
+        uses: Swatinem/rust-cache@v2
 
       - name: Cargo clippy
         run: cargo clippy --all-targets --locked -- -D warnings
@@ -36,3 +42,9 @@ jobs:
 
       - name: Cargo build (release)
         run: cargo build --release --locked
+
+      - name: Check binary size (< 1 MB)
+        run: |
+          $size = (Get-Item target/release/brightnessctl.exe).Length
+          "Release binary: $size bytes" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($size -ge 1MB) { throw "brightnessctl.exe is $size bytes; the limit is 1 MB" }

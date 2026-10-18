@@ -16,7 +16,7 @@
  Pre-built, optimized binaries are available on the [Releases](https://github.com/ujjukumar/brightnessctl-rs/releases) page:
 
  1. Head to [Latest Release](https://github.com/ujjukumar/brightnessctl-rs/releases/latest).
- 2. Download the `brightnessctl-vX.Y.Z-windows-x86_64.zip` bundle (includes default config & docs) or grab the standalone `brightnessctl.exe`.
+ 2. Download the standalone `brightnessctl.exe`, or the `brightnessctl-vX.Y.Z-windows-x86_64.zip` bundle (EXE, README and license). `checksums.txt` has the SHA-256 of both.
  3. Run `brightnessctl.exe`. No installation required!
 
  ---
@@ -103,7 +103,12 @@
  *   **Monitor I/O:** One worker thread per monitor, so slow DDC/CI never blocks the window; rapid changes are coalesced to the latest value
  *   **State Management:** Event-driven, no polling; only one-shot timers (delayed save, display-change refresh)
 
- See [`docs/AGENTS.md`](docs/AGENTS.md) for the full design and contributor rules.
+ ---
+
+ ## 🚀 Contributing & Releases
+
+ *   Changes reach `main` only through pull requests. CI must pass first: `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, and a release build that has to stay under 1 MB.
+ *   Every merged pull request publishes a new [release](https://github.com/ujjukumar/brightnessctl-rs/releases) automatically. The patch number goes up by default; add the `minor` or `major` label to the pull request to bump that part instead.
 
  ---
 
