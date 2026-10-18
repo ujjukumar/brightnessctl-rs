@@ -10,6 +10,7 @@ pub const IDM_ABOUT: u16 = 106;
 pub const IDM_LOCK_MODE: u16 = 107;
 pub const IDM_BACKGROUND_PICK: u16 = 108;
 pub const IDM_BACKGROUND_REMOVE: u16 = 109;
+pub const IDM_THEME_GLASS: u16 = 110;
 
 pub unsafe fn create_menu_bar() -> Result<HMENU> {
     let hmenu = CreateMenu()?;
@@ -33,6 +34,8 @@ pub unsafe fn create_menu_bar() -> Result<HMENU> {
     AppendMenuW(htheme, MF_STRING, IDM_THEME_AUTO as usize, w!("Auto"))?;
     AppendMenuW(htheme, MF_STRING, IDM_THEME_LIGHT as usize, w!("Light"))?;
     AppendMenuW(htheme, MF_STRING, IDM_THEME_DARK as usize, w!("Dark"))?;
+    AppendMenuW(htheme, MF_SEPARATOR, 0, None)?;
+    AppendMenuW(htheme, MF_STRING, IDM_THEME_GLASS as usize, w!("Glass"))?;
     AppendMenuW(hmenu, MF_POPUP, htheme.0 as usize, w!("&Theme"))?;
 
     // Help Menu

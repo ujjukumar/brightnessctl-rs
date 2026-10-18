@@ -17,6 +17,9 @@ const LABEL_HEIGHT: f32 = 16.0;
 /// Row icons are as tall as the label next to them.
 const ROW_ICON_SIZE: f32 = LABEL_HEIGHT;
 const ICON_GAP: f32 = 8.0;
+/// How far a card sticks out past the row it holds; the theme decides whether it's drawn.
+const CARD_PAD: f32 = 10.0;
+pub const CARD_RADIUS: f32 = 10.0;
 const VALUE_WIDTH: f32 = 60.0;
 const TRACK_OFFSET: f32 = 32.0;
 const TRACK_HEIGHT: f32 = 4.0;
@@ -25,9 +28,11 @@ const TOOLTIP_WIDTH: f32 = 300.0;
 const TOOLTIP_HEIGHT: f32 = 100.0;
 const TOOLTIP_GAP: f32 = 8.0;
 
-/// One monitor's row: icon, name label, percentage value, slider track and its click area.
+/// One monitor's row: card, icon, name label, percentage value, slider track and its
+/// click area.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Row {
+    pub card: Rect,
     pub icon: Rect,
     pub label: Rect,
     pub value: Rect,
@@ -40,6 +45,8 @@ pub struct Layout {
     pub title_icon: Rect,
     pub title: Rect,
     pub rows: Vec<Row>,
+    /// Card behind the status bar, drawn by themes that have one.
+    pub status_card: Rect,
     pub status_bar: Rect,
     pub tooltip: Rect,
 }
@@ -79,6 +86,12 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
             let label = rect(label_left, top, value.left.max(label_left), top + LABEL_HEIGHT);
             let track_top = top + TRACK_OFFSET;
             let track = rect(MARGIN, track_top, content_right, track_top + TRACK_HEIGHT);
+            let card = rect(
+                MARGIN - CARD_PAD,
+                top - CARD_PAD,
+                content_right + CARD_PAD,
+                track.bottom + CARD_PAD,
+            );
             // The click area spans the full window width for an easy target.
             let hit = rect(
                 0.0,
@@ -86,11 +99,17 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
                 width.max(track.right),
                 track.bottom + TRACK_HIT_PADDING,
             );
-            Row { icon, label, value, track, hit }
+            Row { card, icon, label, value, track, hit }
         })
         .collect();
 
     let status_bar = rect(0.0, height - STATUS_BAR_HEIGHT, width, height);
+    let status_card = rect(
+        MARGIN - CARD_PAD,
+        status_bar.top + 2.0,
+        content_right + CARD_PAD,
+        status_bar.bottom - 2.0,
+    );
     let tooltip_bottom = status_bar.top - TOOLTIP_GAP;
     let tooltip = rect(
         MARGIN,
@@ -99,7 +118,7 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
         tooltip_bottom,
     );
 
-    Layout { title_icon, title, rows, status_bar, tooltip }
+    Layout { title_icon, title, rows, status_card, status_bar, tooltip }
 }
 
 impl Layout {
@@ -161,9 +180,13 @@ mod tests {
             assert!(row.icon.right <= row.label.left);
             assert!(row.label.bottom <= row.hit.top);
             assert!(row.value.bottom <= row.hit.top);
+            // The card wraps everything the row draws.
+            assert!(row.card.left < row.icon.left && row.card.right > row.value.right);
+            assert!(row.card.top <= row.label.top && row.card.bottom >= row.track.bottom);
         }
         for pair in layout.rows.windows(2) {
             assert!(pair[0].hit.bottom <= pair[1].label.top);
+            assert!(pair[0].card.bottom <= pair[1].card.top);
         }
         assert!(layout.title_icon.right <= layout.title.left);
         assert!(layout.title_icon.bottom <= layout.rows[0].icon.top);
@@ -208,6 +231,10 @@ mod tests {
         assert_eq!(layout.status_bar.bottom, 600.0);
         assert_eq!(layout.status_bar.top, 600.0 - STATUS_BAR_HEIGHT);
         assert!(layout.tooltip.bottom < layout.status_bar.top);
+        assert!(layout.status_card.top >= layout.status_bar.top);
+        assert_eq!(layout.status_card.bottom, layout.status_bar.bottom - 2.0);
+        assert_eq!(layout.status_card.left, MARGIN - CARD_PAD);
+        assert_eq!(layout.status_card.right, 400.0 - MARGIN + CARD_PAD);
     }
 
     #[test]

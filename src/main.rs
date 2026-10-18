@@ -189,6 +189,7 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
     let _ = CheckMenuItem(hmenu, menu::IDM_THEME_AUTO as u32, if theme == ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
     let _ = CheckMenuItem(hmenu, menu::IDM_THEME_LIGHT as u32, if theme == ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
     let _ = CheckMenuItem(hmenu, menu::IDM_THEME_DARK as u32, if theme == ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_GLASS as u32, if theme == ThemeMode::Glass { MF_CHECKED } else { MF_UNCHECKED }.0);
 }
 
 unsafe fn set_theme(window: HWND, theme: ThemeMode) {
@@ -317,6 +318,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_THEME_AUTO => set_theme(window, ThemeMode::Auto),
                     menu::IDM_THEME_LIGHT => set_theme(window, ThemeMode::Light),
                     menu::IDM_THEME_DARK => set_theme(window, ThemeMode::Dark),
+                    menu::IDM_THEME_GLASS => set_theme(window, ThemeMode::Glass),
                     menu::IDM_BACKGROUND_PICK => {
                         let current = borrow_app(window)
                             .and_then(|app| app.state.settings.background_image.clone());

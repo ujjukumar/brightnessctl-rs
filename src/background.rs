@@ -38,6 +38,8 @@ pub struct Picture {
     pub height: u32,
     /// `height` rows of `width * 4` bytes.
     pub pixels: Vec<u8>,
+    /// The same picture, blurred, for the frosted glass panels. Same size as `pixels`.
+    pub blurred: Vec<u8>,
     /// Decoded at the file's own size: a bigger window can't get a sharper copy.
     full_size: bool,
 }
@@ -110,7 +112,59 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Result<Picture> {
         let stride = w * 4;
         let mut pixels = vec![0; stride as usize * h as usize];
         source.CopyPixels(std::ptr::null(), stride, &mut pixels)?;
-        Ok(Picture { width: w, height: h, pixels, full_size })
+        // Blurred here rather than at paint time, so the window thread never waits.
+        let blurred = blur(&pixels, w, h, blur_radius(w, h));
+        Ok(Picture { width: w, height: h, pixels, blurred, full_size })
+    }
+}
+
+/// Radius of the frosted-glass blur, relative to the picture's size so it looks the
+/// same whether the window is small or large.
+fn blur_radius(width: u32, height: u32) -> u32 {
+    (width.min(height) / 24).clamp(4, 32)
+}
+
+/// Two box-blur passes, which is smooth enough behind a translucent panel and needs no
+/// shader. Blurring premultiplied pixels directly is correct, so all four channels are
+/// averaged the same way.
+fn blur(pixels: &[u8], width: u32, height: u32, radius: u32) -> Vec<u8> {
+    let (w, h, r) = (width as usize, height as usize, radius as usize);
+    let mut sharp = pixels.to_vec();
+    let mut scratch = vec![0u8; pixels.len()];
+    for _ in 0..2 {
+        for y in 0..h {
+            blur_run(&sharp, &mut scratch, y * w * 4, y * w * 4, 1, w, r);
+        }
+        for x in 0..w {
+            blur_run(&scratch, &mut sharp, x * 4, x * 4, w, h, r);
+        }
+    }
+    sharp
+}
+
+/// Averages one run of `len` pixels that start at `from` and sit `step` pixels apart,
+/// writing the result to the same places in `dst`. Prefix sums keep the cost the same
+/// whatever the radius is, and a window that runs off an edge just uses the pixels that
+/// are there, so no halo appears.
+fn blur_run(src: &[u8], dst: &mut [u8], from: usize, to: usize, step: usize, len: usize, radius: usize) {
+    let mut sums = vec![[0u32; 4]; len + 1];
+    for i in 0..len {
+        let (before, at) = (sums[i], from + i * step * 4);
+        sums[i + 1] = [
+            before[0] + src[at] as u32,
+            before[1] + src[at + 1] as u32,
+            before[2] + src[at + 2] as u32,
+            before[3] + src[at + 3] as u32,
+        ];
+    }
+    for i in 0..len {
+        let (low, high) = (i.saturating_sub(radius), (i + radius).min(len - 1));
+        let count = (high - low + 1) as u32;
+        let (before, after) = (sums[low], sums[high + 1]);
+        let at = to + i * step * 4;
+        for channel in 0..4 {
+            dst[at + channel] = ((after[channel] - before[channel]) / count) as u8;
+        }
     }
 }
 
@@ -258,7 +312,13 @@ mod tests {
 
     #[test]
     fn test_covers() {
-        let picture = |width, height, full_size| Picture { width, height, pixels: Vec::new(), full_size };
+        let picture = |width, height, full_size| Picture {
+            width,
+            height,
+            pixels: Vec::new(),
+            blurred: Vec::new(),
+            full_size,
+        };
         assert!(picture(800, 600, false).covers(800, 600));
         assert!(picture(800, 600, false).covers(400, 300));
         assert!(!picture(800, 600, false).covers(801, 600));
@@ -292,5 +352,39 @@ mod tests {
     fn test_decode_reports_missing_files() {
         let path = test_dir("missing").join("nothing-here.png");
         with_com(|| assert!(decode(&path, 10, 10).is_err()));
+    }
+
+    #[test]
+    fn test_blur_spreads_an_edge_without_touching_far_pixels() {
+        // One row: sixteen black pixels, then sixteen white ones.
+        let mut pixels = Vec::new();
+        for x in 0..32 {
+            let value = if x < 16 { 0 } else { 255 };
+            pixels.extend_from_slice(&[value, value, value, 255]);
+        }
+        let out = blur(&pixels, 32, 1, 2);
+        assert_eq!(out.len(), pixels.len());
+        // The ends never see the other color, so they stay put.
+        assert_eq!(out[0], 0);
+        assert_eq!(out[124], 255);
+        // The edge becomes a ramp.
+        let luma = |x: usize| out[x * 4] as u32;
+        assert!(luma(14) < luma(16), "{out:?}");
+        assert!((0..31).all(|x| luma(x) <= luma(x + 1)), "{out:?}");
+        // Alpha is opaque everywhere and must stay that way.
+        assert!(out.chunks(4).all(|pixel| pixel[3] == 255), "{out:?}");
+    }
+
+    #[test]
+    fn test_blur_keeps_a_flat_picture_flat() {
+        let pixels = [40u8, 80, 120, 255].repeat(6 * 4);
+        assert_eq!(blur(&pixels, 6, 4, 3), pixels);
+    }
+
+    #[test]
+    fn test_blur_radius_scales_with_the_picture() {
+        assert_eq!(blur_radius(800, 600), 25);
+        assert_eq!(blur_radius(100, 100), 4);
+        assert_eq!(blur_radius(4000, 4000), 32);
     }
 }

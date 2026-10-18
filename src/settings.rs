@@ -17,14 +17,16 @@ pub enum ThemeMode {
     Light,
     Dark,
     Auto,
+    /// Creamy white with a soft gradient and translucent panels over the background.
+    Glass,
 }
 
 impl ThemeMode {
-    /// Whether to draw dark; `Auto` follows Windows' app mode.
+    /// Whether to draw dark; `Auto` follows Windows' app mode. `Glass` is a bright theme.
     pub fn is_dark(self, system_dark: bool) -> bool {
         match self {
             ThemeMode::Dark => true,
-            ThemeMode::Light => false,
+            ThemeMode::Light | ThemeMode::Glass => false,
             ThemeMode::Auto => system_dark,
         }
     }
@@ -505,6 +507,16 @@ mod tests {
         assert!(ThemeMode::Dark.is_dark(false));
         assert!(ThemeMode::Auto.is_dark(true));
         assert!(!ThemeMode::Auto.is_dark(false));
+        // Glass is a bright theme whatever Windows is set to.
+        assert!(!ThemeMode::Glass.is_dark(true));
+        assert!(!ThemeMode::Glass.is_dark(false));
+    }
+
+    #[test]
+    fn test_glass_theme_round_trips_through_json() {
+        let json = serde_json::to_string(&ThemeMode::Glass).unwrap();
+        assert_eq!(json, "\"Glass\"");
+        assert_eq!(serde_json::from_str::<ThemeMode>(&json).unwrap(), ThemeMode::Glass);
     }
 
     #[test]

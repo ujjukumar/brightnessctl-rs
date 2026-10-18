@@ -24,10 +24,11 @@
  ## ✨ Key Features
 
  *   **Zero Bloat:** Built with raw Win32 APIs, Direct2D, and DirectWrite. No Electron, no Qt, no WebViews, no .NET runtime.
- *   **Ultralight:** Release binary is **< 1 MB** (about 290 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
+ *   **Ultralight:** Release binary is **< 1 MB** (about 295 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
  *   **Instant Startup:** The window opens immediately. Monitors are detected in the background, so a slow monitor never holds up the UI.
  *   **Zero Idle CPU:** Nothing runs while you aren't using it: no polling, no periodic timers.
  *   **Native Windows Look & Feel:** Segoe UI, native title bar and menu, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling.
+ *   **Glass Theme:** An extra theme with a soft cream-to-peach gradient, rounded translucent panels, and rounded window corners on Windows 11. With a background picture the panels blur it, so they look like frosted glass.
  *   **Personal Touch:** Optional background picture behind the sliders, dimmed so the text stays readable, plus small built-in icons (monitor or laptop per display). The picture is shrunk to the window size, so even a large photo uses little memory.
  *   **Universal Display Support:**
      *   **Internal Displays:** Built-in laptop panels are controlled through WMI (`WmiMonitorBrightness`).
@@ -74,7 +75,8 @@
  3.  **View → Sync All Monitors (Lock)** moves every monitor by the same amount.
  4.  **View → Refresh Monitors** finds the displays again. This also happens automatically when a display is connected or disconnected.
  5.  **View → Background Image...** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **View → Remove Background** goes back to the plain theme color.
- 6.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
+ 6.  **Theme → Glass** switches to the creamy gradient look with translucent panels (frosted over your picture, if you set one). **Auto**, **Light** and **Dark** keep the plain Windows look.
+ 7.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
 
  ---
 
@@ -82,7 +84,7 @@
 
  Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, which is created with defaults on first run. A `brightnessctl.json` that an older version left next to `brightnessctl.exe` is moved there automatically. Edit the file while the app is closed, since the app rewrites it when it saves. You can customize:
 
- *   **Theme:** `"Auto"` (follows Windows), `"Light"`, or `"Dark"`. Also available from the **Theme** menu.
+ *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also available from the **Theme** menu.
  *   **Hotkeys:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for:
      *   `StepUp` (Increase brightness)
      *   `StepDown` (Decrease brightness)
@@ -101,8 +103,8 @@
 
  *   **Language:** Rust 2024 Edition
  *   **Windowing & Event Loop:** Native Win32 API (`CreateWindowExW`, `GetMessageW`)
- *   **Hardware Acceleration:** Direct2D (geometry & shapes) + DirectWrite (typography), Per-Monitor DPI aware
- *   **Pictures:** Windows Imaging Component (WIC), built into Windows, decodes the background on its own thread
+ *   **Hardware Acceleration:** Direct2D (geometry & shapes, gradients, rounded translucent panels) + DirectWrite (typography), Per-Monitor DPI aware
+ *   **Pictures:** Windows Imaging Component (WIC), built into Windows, decodes the background on its own thread and blurs a window-sized copy for the frosted panels
  *   **Monitor Protocol:** `Dxva2` High-Level Monitor Configuration API and VCP `0x10` (DDC/CI); WMI for built-in panels
  *   **Monitor I/O:** One worker thread per monitor, so slow DDC/CI never blocks the window; rapid changes are coalesced to the latest value
  *   **State Management:** Event-driven, no polling; only one-shot timers (delayed save, display-change refresh, background re-decode after a resize)
