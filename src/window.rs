@@ -2,7 +2,8 @@ use windows::{
     core::*,
     Win32::Foundation::*,
     Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_COLOR_DEFAULT,
+        DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
         DWMWCP_ROUND,
     },
     Win32::Graphics::Gdi::*,
@@ -21,8 +22,8 @@ fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
 
-/// Draws the system title bar dark or light. The menu bar stays light either way.
-/// Fails harmlessly on Windows versions without the attribute.
+/// Draws the system title bar dark or light. Fails harmlessly on Windows versions
+/// without the attribute.
 pub fn set_dark_title_bar(hwnd: HWND, dark: bool) {
     let value = BOOL::from(dark);
     unsafe {
@@ -49,6 +50,40 @@ pub fn set_round_corners(hwnd: HWND) {
     }
 }
 
+/// Colors for the parts of the window Windows draws itself: the title bar, the text in it
+/// and the thin border around the window. Windows 11 only; on Windows 10 the attributes
+/// are unknown and the calls fail harmlessly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameColors {
+    pub background: COLORREF,
+    pub text: COLORREF,
+    pub border: COLORREF,
+}
+
+/// Tints the title bar and border, or with `None` hands them back to Windows.
+pub fn set_frame_colors(hwnd: HWND, colors: Option<FrameColors>) {
+    let colors = colors.unwrap_or(FrameColors {
+        background: COLORREF(DWMWA_COLOR_DEFAULT),
+        text: COLORREF(DWMWA_COLOR_DEFAULT),
+        border: COLORREF(DWMWA_COLOR_DEFAULT),
+    });
+    let attributes = [
+        (DWMWA_CAPTION_COLOR, colors.background),
+        (DWMWA_TEXT_COLOR, colors.text),
+        (DWMWA_BORDER_COLOR, colors.border),
+    ];
+    unsafe {
+        for (attribute, color) in attributes {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                attribute,
+                &color.0 as *const u32 as *const std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+    }
+}
+
 /// `param` reaches `wnd_proc` in `WM_NCCREATE` (`CREATESTRUCTW::lpCreateParams`).
 pub unsafe fn create(
     instance: HINSTANCE, 
@@ -56,6 +91,7 @@ pub unsafe fn create(
     wnd_proc: WNDPROC,
     menu: Option<HMENU>,
     dark: bool,
+    frame: Option<FrameColors>,
     param: Option<*const std::ffi::c_void>,
 ) -> Result<HWND> {
     let class_name = CLASS_NAME;
@@ -125,6 +161,7 @@ pub unsafe fn create(
     );
     // Before showing, so a dark window never flashes a light title bar.
     set_dark_title_bar(hwnd, dark);
+    set_frame_colors(hwnd, frame);
     set_round_corners(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
 
@@ -152,7 +189,7 @@ mod tests {
     fn test_window_creation() {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
-            let result = create(instance, "Test Window", Some(test_wndproc), None, false, None);
+            let result = create(instance, "Test Window", Some(test_wndproc), None, false, None, None);
             assert!(result.is_ok(), "Window creation failed: {:?}", result.err());
             let hwnd = result.unwrap();
             assert!(!hwnd.0.is_null());

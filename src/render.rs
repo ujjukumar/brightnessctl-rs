@@ -53,6 +53,8 @@ use crate::layout;
 use crate::state::Backend;
 use crate::background::{self, Picture};
 use crate::settings::ThemeMode;
+use crate::window::FrameColors;
+use windows::Win32::Foundation::COLORREF;
 
 /// Which look to draw. `Auto` picks `Dark` or `Light`, while `Glass` is a look of its own
 /// with a gradient and translucent panels.
@@ -79,6 +81,38 @@ impl ThemeStyle {
     fn has_cards(self) -> bool {
         self == ThemeStyle::Glass
     }
+
+    /// Colors for the title bar and border, when the theme wants them tinted. The flat
+    /// themes return `None` and keep the native frame.
+    fn frame_colors(self) -> Option<FrameColors> {
+        if !self.has_cards() {
+            return None;
+        }
+        let palette = ColorPalette::glass();
+        Some(FrameColors {
+            // Matches the top of the gradient, so the title bar looks like part of it.
+            background: colorref(palette.bg),
+            text: colorref(palette.fg),
+            // A little darker than the background, so the window keeps a visible edge.
+            border: colorref(D2D1_COLOR_F {
+                r: palette.bg.r * 0.88,
+                g: palette.bg.g * 0.86,
+                b: palette.bg.b * 0.84,
+                a: 1.0,
+            }),
+        })
+    }
+}
+
+/// The window frame colors for the theme in `state`, or `None` to leave it to Windows.
+pub fn frame_colors(state: &AppState) -> Option<FrameColors> {
+    ThemeStyle::of(state).frame_colors()
+}
+
+/// Converts a drawing color to the `0x00BBGGRR` layout Win32 color APIs use.
+fn colorref(color: D2D1_COLOR_F) -> COLORREF {
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+    COLORREF(channel(color.r) | (channel(color.g) << 8) | (channel(color.b) << 16))
 }
 
 pub struct ColorPalette {
@@ -467,6 +501,19 @@ impl Renderer {
                 DWRITE_MEASURING_MODE_NATURAL,
             );
 
+            // The menu is behind a button in the header, so the window has no menu bar.
+            if style.has_cards() {
+                self.draw_frosted(&rt, &layout.menu_button, &window_rect, dim);
+                let chip = D2D1_ROUNDED_RECT {
+                    rect: layout.menu_button,
+                    radiusX: layout::CARD_RADIUS * 0.6,
+                    radiusY: layout::CARD_RADIUS * 0.6,
+                };
+                rt.FillRoundedRectangle(&chip, self.brush_card.as_ref().unwrap());
+                rt.DrawRoundedRectangle(&chip, self.brush_border.as_ref().unwrap(), 1.0, None);
+            }
+            draw_menu_button(&rt, &layout.menu_button, self.brush_fg.as_ref().unwrap());
+
             for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
                 if style.has_cards() {
                     // The picture shows through the panel, blurred, like frosted glass.
@@ -743,6 +790,15 @@ unsafe fn draw_sun(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1Solid
         let (sin, cos) = (i as f32 * std::f32::consts::FRAC_PI_4).sin_cos();
         let ray = |r: f32| g.point(12.0 + cos * r, 12.0 + sin * r);
         rt.DrawLine(ray(7.5), ray(10.5), brush, g.len(2.0), None);
+    }
+}
+
+/// Header button: three stacked bars, the usual mark for a menu (16-unit grid).
+unsafe fn draw_menu_button(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    let stroke = g.len(1.4);
+    for y in [5.0, 8.0, 11.0] {
+        rt.DrawLine(g.point(4.0, y), g.point(12.0, y), brush, stroke, None);
     }
 }
 
