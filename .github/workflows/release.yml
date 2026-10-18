@@ -1,104 +1,100 @@
 name: Release
 
+# Every PR merged into main publishes the next version: the patch number goes up
+# by default, or the minor/major number when the PR has the `minor` or `major` label.
+# Run the workflow by hand on main to release again (e.g. after a failed run).
 on:
-  push:
-    tags:
-      - 'v*'
+  pull_request:
+    types: [ closed ]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
-      tag_name:
-        description: 'Release tag (e.g. v0.1.0)'
-        required: true
-        default: 'v0.1.0'
-      draft:
-        description: 'Create draft release'
-        type: boolean
-        default: false
-      prerelease:
-        description: 'Mark as prerelease'
-        type: boolean
-        default: false
+      bump:
+        description: 'Version part to increase'
+        type: choice
+        options: [ patch, minor, major ]
+        default: patch
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   release:
     name: Build & Publish Release
+    if: github.event.pull_request.merged == true || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: windows-latest
+    env:
+      COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.COMMIT }}
+          fetch-depth: 0
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2
 
-      - name: Determine tag name
-        id: vars
-        shell: pwsh
+      - name: Next version
+        id: version
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BUMP_INPUT: ${{ inputs.bump }}
         run: |
-          if ('${{ github.ref_type }}' -eq 'tag') {
-            $tag = '${{ github.ref_name }}'
-          } else {
-            $tag = '${{ inputs.tag_name }}'
+          $labels = @()
+          if ($env:LABELS -and $env:LABELS -ne 'null') { $labels = @($env:LABELS | ConvertFrom-Json) }
+          $bump = 'patch'
+          if ($labels -contains 'minor') { $bump = 'minor' }
+          if ($labels -contains 'major') { $bump = 'major' }
+          if ($env:BUMP_INPUT) { $bump = $env:BUMP_INPUT }
+
+          $latest = git tag --list 'v*' --sort=-v:refname |
+            Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+            Select-Object -First 1
+          $v = if ($latest) { [version]$latest.Substring(1) } else { [version]'0.0.0' }
+          $next = switch ($bump) {
+            'major' { "$($v.Major + 1).0.0" }
+            'minor' { "$($v.Major).$($v.Minor + 1).0" }
+            default { "$($v.Major).$($v.Minor).$($v.Build + 1)" }
           }
-          $version = $tag -replace '^v', ''
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "version=$version" >> $env:GITHUB_OUTPUT
+          "Latest: $latest, bump: $bump, next: v$next"
+          "tag=v$next" >> $env:GITHUB_OUTPUT
 
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Package release artifacts
-        shell: pwsh
+      - name: Package
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $tag = "${{ steps.vars.outputs.tag }}"
-          $pkgDir = "brightnessctl-${tag}-windows-x86_64"
-          New-Item -ItemType Directory -Path "dist/$pkgDir" -Force | Out-Null
+          $pkg = "brightnessctl-$env:TAG-windows-x86_64"
+          New-Item -ItemType Directory -Path "dist/$pkg" -Force | Out-Null
+          Copy-Item target/release/brightnessctl.exe, README.md, LICENSE -Destination "dist/$pkg"
+          Compress-Archive -Path "dist/$pkg/*" -DestinationPath "dist/$pkg.zip"
+          Copy-Item target/release/brightnessctl.exe -Destination dist
 
-          # Copy assets into package
-          Copy-Item "target/release/brightnessctl.exe" -Destination "dist/$pkgDir/brightnessctl.exe"
-          Copy-Item "brightnessctl.json" -Destination "dist/$pkgDir/brightnessctl.json"
-          Copy-Item "README.md" -Destination "dist/$pkgDir/README.md"
-          Copy-Item "LICENSE" -Destination "dist/$pkgDir/LICENSE"
-
-          # Standalone executable for direct download
-          Copy-Item "target/release/brightnessctl.exe" -Destination "dist/brightnessctl.exe"
-
-          # Create zip archive
-          Compress-Archive -Path "dist/$pkgDir/*" -DestinationPath "dist/$pkgDir.zip" -Force
-
-          # Generate SHA256 checksums
           Push-Location dist
-          $zipHash = (Get-FileHash "$pkgDir.zip" -Algorithm SHA256).Hash
-          "$zipHash  $pkgDir.zip" | Out-File -FilePath "$pkgDir.zip.sha256" -Encoding ascii
-
-          $exeHash = (Get-FileHash "brightnessctl.exe" -Algorithm SHA256).Hash
-          "$exeHash  brightnessctl.exe" | Out-File -FilePath "brightnessctl.exe.sha256" -Encoding ascii
-
-          # Combined checksums
-          "$zipHash  $pkgDir.zip`n$exeHash  brightnessctl.exe" | Out-File -FilePath "checksums.txt" -Encoding ascii
+          Get-FileHash "$pkg.zip", brightnessctl.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content checksums.txt -Encoding ascii
+          Get-Content checksums.txt
           Pop-Location
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: brightnessctl ${{ steps.vars.outputs.tag }}
-          draft: ${{ inputs.draft || false }}
-          prerelease: ${{ inputs.prerelease || false }}
-          generate_release_notes: true
-          files: |
-            dist/*.zip
-            dist/*.zip.sha256
-            dist/brightnessctl.exe
-            dist/brightnessctl.exe.sha256
-            dist/checksums.txt
+      - name: Publish release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create $env:TAG --target $env:COMMIT --title "brightnessctl $env:TAG" --generate-notes `
+            "dist/brightnessctl-$env:TAG-windows-x86_64.zip" dist/brightnessctl.exe dist/checksums.txt
