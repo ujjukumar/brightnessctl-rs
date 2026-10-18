@@ -24,11 +24,11 @@
  ## ✨ Key Features
 
  *   **Zero Bloat:** Built with raw Win32 APIs, Direct2D, and DirectWrite. No Electron, no Qt, no WebViews, no .NET runtime.
- *   **Ultralight:** Release binary is **< 1 MB** (about 295 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
+ *   **Ultralight:** Release binary is **< 1 MB** (about 297 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
  *   **Instant Startup:** The window opens immediately. Monitors are detected in the background, so a slow monitor never holds up the UI.
  *   **Zero Idle CPU:** Nothing runs while you aren't using it: no polling, no periodic timers.
- *   **Native Windows Look & Feel:** Segoe UI, native title bar and menu, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling.
- *   **Glass Theme:** An extra theme with a soft cream-to-peach gradient, rounded translucent panels, and rounded window corners on Windows 11. With a background picture the panels blur it, so they look like frosted glass.
+ *   **Native Windows Look & Feel:** Segoe UI, a native title bar, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling. The File, View, Theme and Help menus open from a small button at the right of the header, so the window keeps a plain client area.
+ *   **Glass Theme:** An extra theme with a soft cream-to-peach gradient, rounded translucent panels, and rounded window corners on Windows 11. With a background picture the panels blur it, so they look like frosted glass. The title bar is tinted to match the top of the gradient, so the frame and the window look like one surface.
  *   **Personal Touch:** Optional background picture behind the sliders, dimmed so the text stays readable, plus small built-in icons (monitor or laptop per display). The picture is shrunk to the window size, so even a large photo uses little memory.
  *   **Universal Display Support:**
      *   **Internal Displays:** Built-in laptop panels are controlled through WMI (`WmiMonitorBrightness`).
@@ -67,7 +67,7 @@
 
  ## 🎮 Usage
 
- 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward.
+ 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward. The **menu button** at the right of the header opens the **File**, **View**, **Theme** and **Help** menus.
  2.  Adjust brightness:
      *   **Drag** or click a slider.
      *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
@@ -84,14 +84,14 @@
 
  Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, which is created with defaults on first run. A `brightnessctl.json` that an older version left next to `brightnessctl.exe` is moved there automatically. Edit the file while the app is closed, since the app rewrites it when it saves. You can customize:
 
- *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also available from the **Theme** menu.
+ *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also available from **Theme** in the header menu.
  *   **Hotkeys:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for:
      *   `StepUp` (Increase brightness)
      *   `StepDown` (Decrease brightness)
      *   `CyclePresets` (Switch between configured levels)
  *   **Presets:** Brightness levels from 0 to 1, cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`).
  *   **Step Size:** The hotkey step (default `0.1` / 10%).
- *   **Background:** `background_image` is the picture's full path (`null` for none; also set from the **View** menu). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
+ *   **Background:** `background_image` is the picture's full path (`null` for none; also set from **View** in the header menu). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
 
  `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. The file may be saved with or without a UTF-8 byte order mark. If it can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
 
