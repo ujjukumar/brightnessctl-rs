@@ -49,6 +49,11 @@ struct App {
     hotkeys: hotkeys::HotkeyManager,
     /// Bumped by every `load_background`; only the newest decode result is used.
     background_generation: usize,
+    /// The menu the header button opens; the window itself has no menu bar.
+    menu: menu::Menus,
+    /// Where a click on the header button landed, held until the button comes back up so
+    /// the menu opens on release (a menu opened while the button is down closes at once).
+    menu_at: Option<(i32, i32)>,
 }
 
 /// Posted once the window is up: find the monitors and start their workers.
@@ -70,6 +75,7 @@ fn main() -> Result<()> {
         let (settings, config_warning) = Settings::load();
         let system_dark = Settings::is_system_dark_mode();
         let dark = settings.theme.is_dark(system_dark);
+        let menus = menu::create_menus()?;
         let app = RefCell::new(App {
             state: AppState {
                 monitors: Vec::new(),
@@ -89,13 +95,17 @@ fn main() -> Result<()> {
             renderer: render::Renderer::new()?,
             hotkeys: hotkeys::HotkeyManager::new(),
             background_generation: 0,
+            menu: menus,
+            menu_at: None,
         });
 
         let instance = GetModuleHandleW(None)?.into();
-        let hmenu = menu::create_menu_bar()?;
+        // Tint the frame before the window is shown, so it never flashes the system colors.
+        let frame = render::frame_colors(&app.borrow().state);
         // `app` outlives the window: the loop below only ends once the window is destroyed.
         let app_ptr = &app as *const RefCell<App> as *const std::ffi::c_void;
-        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu), dark, Some(app_ptr))?;
+        // The window is created without a menu: the header button opens the menus instead.
+        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), None, dark, frame, Some(app_ptr))?;
         // Paint now; otherwise the first WM_PAINT would wait behind WM_APP_INIT.
         let _ = UpdateWindow(hwnd);
         debug_log!("window shown after {:?}", started.elapsed());
@@ -103,7 +113,7 @@ fn main() -> Result<()> {
 
         {
             let mut guard = app.borrow_mut();
-            let App { state, hotkeys, .. } = &mut *guard;
+            let App { state, hotkeys, menu, .. } = &mut *guard;
             hotkeys.register_all(hwnd, &state.settings.hotkeys);
             hotkeys.sync_status(state);
 
@@ -112,7 +122,7 @@ fn main() -> Result<()> {
             if failed_count > 0 && state.status_message == "Ready" {
                 state.status_message = format!("Warning: {} hotkeys failed to register", failed_count);
             }
-            update_theme_menu(hwnd, state);
+            update_theme_menu(menu.theme, state);
         }
 
         let mut message = MSG::default();
@@ -182,29 +192,29 @@ unsafe fn refresh_monitors(window: HWND, reason: &str) {
     }
 }
 
-unsafe fn update_theme_menu(window: HWND, state: &AppState) {
-    let hmenu = GetMenu(window);
+unsafe fn update_theme_menu(theme_menu: HMENU, state: &AppState) {
     let theme = state.settings.theme;
-    
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_AUTO as u32, if theme == ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_LIGHT as u32, if theme == ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_DARK as u32, if theme == ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
-    let _ = CheckMenuItem(hmenu, menu::IDM_THEME_GLASS as u32, if theme == ThemeMode::Glass { MF_CHECKED } else { MF_UNCHECKED }.0);
+
+    let _ = CheckMenuItem(theme_menu, menu::IDM_THEME_AUTO as u32, if theme == ThemeMode::Auto { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(theme_menu, menu::IDM_THEME_LIGHT as u32, if theme == ThemeMode::Light { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(theme_menu, menu::IDM_THEME_DARK as u32, if theme == ThemeMode::Dark { MF_CHECKED } else { MF_UNCHECKED }.0);
+    let _ = CheckMenuItem(theme_menu, menu::IDM_THEME_GLASS as u32, if theme == ThemeMode::Glass { MF_CHECKED } else { MF_UNCHECKED }.0);
 }
 
 unsafe fn set_theme(window: HWND, theme: ThemeMode) {
     let Some(mut app) = borrow_app(window) else {
         return;
     };
-    let state = &mut app.state;
-    state.settings.theme = theme;
-    let _ = state.settings.save();
-    update_theme_menu(window, state);
-    state.status_message = format!("Theme set to {:?}", theme);
-    let dark = state.is_dark();
+    app.state.settings.theme = theme;
+    let _ = app.state.settings.save();
+    update_theme_menu(app.menu.theme, &app.state);
+    app.state.status_message = format!("Theme set to {:?}", theme);
+    let dark = app.state.is_dark();
+    let frame = render::frame_colors(&app.state);
     drop(app);
     // Redrawing the frame can send messages back to the window, so after the borrow.
     window::set_dark_title_bar(window, dark);
+    window::set_frame_colors(window, frame);
     let _ = InvalidateRect(Some(window), None, false);
 }
 
@@ -300,10 +310,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_REFRESH => refresh_monitors(window, "Monitors refreshed"),
                     menu::IDM_LOCK_MODE => {
                         if let Some(mut app) = borrow_app(window) {
+                            let hmenu = app.menu.root;
                             let state = &mut app.state;
                             state.lock_mode = !state.lock_mode;
-                            
-                            let hmenu = GetMenu(window);
                             let check = if state.lock_mode { MF_CHECKED } else { MF_UNCHECKED };
                             let _ = CheckMenuItem(hmenu, menu::IDM_LOCK_MODE as u32, check.0);
 
@@ -400,8 +409,10 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_LBUTTONDOWN => {
                 let x = (lparam.0 as i16) as i32;
                 let y = ((lparam.0 >> 16) as i16) as i32;
-                handle_input(window, x, y, true);
+                // Captured before, because opening the menu runs a modal loop: a capture
+                // taken after it returned would be held with no button down.
                 SetCapture(window);
+                handle_input(window, x, y, true);
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
@@ -426,11 +437,18 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
+                let mut menu_at = None;
                 if let Some(mut app) = borrow_app(window) {
                     app.state.active_monitor_idx = None;
+                    menu_at = app.menu_at.take();
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 let _ = ReleaseCapture();
+                // After the release: the menu runs its own modal loop, and a menu opened
+                // while the button is still down would close again at once.
+                if let Some((x, y)) = menu_at {
+                    open_menu(window, x, y);
+                }
                 LRESULT(0)
             }
             worker::WM_APP_WRITE_DONE => {
@@ -619,7 +637,7 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
 
 unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
     if let Some(mut app) = borrow_app(window) {
-        let state = &mut app.state;
+        let App { state, menu_at, .. } = &mut *app;
         // Mouse coordinates are physical pixels; the layout is in DIPs.
         let dpi = GetDpiForWindow(window);
         let mut rect = RECT::default();
@@ -647,8 +665,21 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         // that can't be controlled) ignore clicks. Clicking anywhere but the label being
         // edited commits the typed value. Pressing on a track starts a drag.
         if is_down {
-            let hit = hit.filter(|h| state.monitors.get(h.index()).is_some_and(|m| m.accepts_input()));
+            let hit = hit.filter(|h| match h.index() {
+                Some(idx) => state.monitors.get(idx).is_some_and(|m| m.accepts_input()),
+                // The menu button is always clickable.
+                None => true,
+            });
             match hit {
+                Some(Hit::Menu) => {
+                    state.commit_edit();
+                    // Opened on release: a menu opened while the button is down would be
+                    // dismissed by the button coming back up.
+                    *menu_at = Some((
+                        layout::dip_to_px(layout.menu_button.left, dpi),
+                        layout::dip_to_px(layout.menu_button.bottom, dpi),
+                    ));
+                }
                 Some(Hit::Value(idx)) => state.begin_edit(idx),
                 Some(Hit::Track(idx)) => {
                     state.commit_edit();
@@ -684,4 +715,16 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
             }
         }
     }
+}
+
+/// Opens the menu from the header button and turns the choice into a `WM_COMMAND`.
+unsafe fn open_menu(window: HWND, x: i32, y: i32) {
+    let Some(app) = borrow_app(window) else {
+        return;
+    };
+    let root = app.menu.root;
+    drop(app);
+    // The pop-up runs its own message loop, so the App must not be borrowed here. The
+    // command it delivers comes back as the usual `WM_COMMAND`.
+    menu::show_popup(window, root, x, y);
 }

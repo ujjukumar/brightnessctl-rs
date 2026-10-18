@@ -1,3 +1,5 @@
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
@@ -12,13 +14,22 @@ pub const IDM_BACKGROUND_PICK: u16 = 108;
 pub const IDM_BACKGROUND_REMOVE: u16 = 109;
 pub const IDM_THEME_GLASS: u16 = 110;
 
-pub unsafe fn create_menu_bar() -> Result<HMENU> {
-    let hmenu = CreateMenu()?;
+/// The menus the header button opens. The window has no menu bar, so there is no bar for
+/// Windows to draw and tint; the handles are kept so the check marks can still be updated.
+pub struct Menus {
+    /// The top-level pop-up holding File, View, Theme and Help.
+    pub root: HMENU,
+    /// The theme sub-menu, whose check mark follows the current theme.
+    pub theme: HMENU,
+}
+
+pub unsafe fn create_menus() -> Result<Menus> {
+    let root = CreatePopupMenu()?;
 
     // File Menu
     let hfile = CreatePopupMenu()?;
     AppendMenuW(hfile, MF_STRING, IDM_EXIT as usize, w!("Exit"))?;
-    AppendMenuW(hmenu, MF_POPUP, hfile.0 as usize, w!("&File"))?;
+    AppendMenuW(root, MF_POPUP, hfile.0 as usize, w!("File"))?;
 
     // View Menu
     let hview = CreatePopupMenu()?;
@@ -27,21 +38,41 @@ pub unsafe fn create_menu_bar() -> Result<HMENU> {
     AppendMenuW(hview, MF_SEPARATOR, 0, None)?;
     AppendMenuW(hview, MF_STRING, IDM_BACKGROUND_PICK as usize, w!("Background Image..."))?;
     AppendMenuW(hview, MF_STRING, IDM_BACKGROUND_REMOVE as usize, w!("Remove Background"))?;
-    AppendMenuW(hmenu, MF_POPUP, hview.0 as usize, w!("&View"))?;
+    AppendMenuW(root, MF_POPUP, hview.0 as usize, w!("View"))?;
 
     // Theme Menu
-    let htheme = CreatePopupMenu()?;
-    AppendMenuW(htheme, MF_STRING, IDM_THEME_AUTO as usize, w!("Auto"))?;
-    AppendMenuW(htheme, MF_STRING, IDM_THEME_LIGHT as usize, w!("Light"))?;
-    AppendMenuW(htheme, MF_STRING, IDM_THEME_DARK as usize, w!("Dark"))?;
-    AppendMenuW(htheme, MF_SEPARATOR, 0, None)?;
-    AppendMenuW(htheme, MF_STRING, IDM_THEME_GLASS as usize, w!("Glass"))?;
-    AppendMenuW(hmenu, MF_POPUP, htheme.0 as usize, w!("&Theme"))?;
+    let theme = CreatePopupMenu()?;
+    AppendMenuW(theme, MF_STRING, IDM_THEME_AUTO as usize, w!("Auto"))?;
+    AppendMenuW(theme, MF_STRING, IDM_THEME_LIGHT as usize, w!("Light"))?;
+    AppendMenuW(theme, MF_STRING, IDM_THEME_DARK as usize, w!("Dark"))?;
+    AppendMenuW(theme, MF_SEPARATOR, 0, None)?;
+    AppendMenuW(theme, MF_STRING, IDM_THEME_GLASS as usize, w!("Glass"))?;
+    AppendMenuW(root, MF_POPUP, theme.0 as usize, w!("Theme"))?;
 
     // Help Menu
     let hhelp = CreatePopupMenu()?;
     AppendMenuW(hhelp, MF_STRING, IDM_ABOUT as usize, w!("About"))?;
-    AppendMenuW(hmenu, MF_POPUP, hhelp.0 as usize, w!("&Help"))?;
+    AppendMenuW(root, MF_POPUP, hhelp.0 as usize, w!("Help"))?;
 
-    Ok(hmenu)
+    Ok(Menus { root, theme })
+}
+
+/// Opens `hmenu` as a pop-up at the window-relative point (`x`, `y`). The chosen item is
+/// delivered to the window as a `WM_COMMAND`, exactly like the old menu bar did.
+pub unsafe fn show_popup(window: HWND, hmenu: HMENU, x: i32, y: i32) {
+    let mut point = POINT { x, y };
+    let _ = ClientToScreen(window, &mut point);
+    // Without this the pop-up would not close when the user clicks elsewhere.
+    let _ = SetForegroundWindow(window);
+    let _ = TrackPopupMenu(
+        hmenu,
+        TPM_LEFTALIGN | TPM_TOPALIGN,
+        point.x,
+        point.y,
+        None,
+        window,
+        None,
+    );
+    // The pop-up has to see a null message afterwards, or it can stay stuck open.
+    let _ = PostMessageW(Some(window), WM_NULL, WPARAM(0), LPARAM(0));
 }

@@ -11,6 +11,8 @@ pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 
 const TITLE_HEIGHT: f32 = 32.0;
 const TITLE_ICON_SIZE: f32 = 24.0;
+/// The header button that opens the menu; the window has no menu bar.
+const MENU_BUTTON_SIZE: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 48.0;
 const ROW_PITCH: f32 = 72.0;
 const LABEL_HEIGHT: f32 = 16.0;
@@ -44,6 +46,8 @@ pub struct Row {
 pub struct Layout {
     pub title_icon: Rect,
     pub title: Rect,
+    /// The menu button at the right end of the header.
+    pub menu_button: Rect,
     pub rows: Vec<Row>,
     /// Card behind the status bar, drawn by themes that have one.
     pub status_card: Rect,
@@ -53,6 +57,8 @@ pub struct Layout {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
+    /// The menu button in the header.
+    Menu,
     /// The percentage label of row `n`.
     Value(usize),
     /// The slider of row `n`.
@@ -60,10 +66,11 @@ pub enum Hit {
 }
 
 impl Hit {
-    /// The row that was hit.
-    pub fn index(self) -> usize {
+    /// The row that was hit, or `None` for the menu button.
+    pub fn index(self) -> Option<usize> {
         match self {
-            Hit::Value(i) | Hit::Track(i) => i,
+            Hit::Menu => None,
+            Hit::Value(i) | Hit::Track(i) => Some(i),
         }
     }
 }
@@ -74,7 +81,19 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
     let icon_top = MARGIN + (TITLE_HEIGHT - TITLE_ICON_SIZE) / 2.0;
     let title_icon = rect(MARGIN, icon_top, MARGIN + TITLE_ICON_SIZE, icon_top + TITLE_ICON_SIZE);
     let title_left = title_icon.right + ICON_GAP;
-    let title = rect(title_left, MARGIN, content_right.max(title_left), MARGIN + TITLE_HEIGHT);
+    let button_top = MARGIN + (TITLE_HEIGHT - MENU_BUTTON_SIZE) / 2.0;
+    let menu_button = rect(
+        content_right - MENU_BUTTON_SIZE,
+        button_top,
+        content_right,
+        button_top + MENU_BUTTON_SIZE,
+    );
+    let title = rect(
+        title_left,
+        MARGIN,
+        (menu_button.left - ICON_GAP).max(title_left),
+        MARGIN + TITLE_HEIGHT,
+    );
 
     let first_row_top = MARGIN + HEADER_HEIGHT;
     let rows = (0..row_count)
@@ -118,12 +137,15 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
         tooltip_bottom,
     );
 
-    Layout { title_icon, title, rows, status_card, status_bar, tooltip }
+    Layout { title_icon, title, menu_button, rows, status_card, status_bar, tooltip }
 }
 
 impl Layout {
     /// Returns what lies under the point (`x`, `y`), in DIPs.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
+        if contains(&self.menu_button, x, y) {
+            return Some(Hit::Menu);
+        }
         for (i, row) in self.rows.iter().enumerate() {
             if contains(&row.value, x, y) {
                 return Some(Hit::Value(i));
@@ -155,6 +177,11 @@ pub fn px_to_dip(px: i32, dpi: u32) -> f32 {
     px as f32 * 96.0 / dpi as f32
 }
 
+/// Converts DIPs to physical pixels for a window at `dpi`.
+pub fn dip_to_px(dip: f32, dpi: u32) -> i32 {
+    (dip * dpi as f32 / 96.0).round() as i32
+}
+
 fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {
     Rect { left, top, right, bottom }
 }
@@ -169,6 +196,16 @@ mod tests {
 
     fn center(r: &Rect) -> (f32, f32) {
         ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0)
+    }
+
+    #[test]
+    fn test_menu_button_sits_at_the_top_right() {
+        let layout = compute(400.0, 600.0, 1);
+        assert_eq!(layout.menu_button.right, 400.0 - MARGIN);
+        assert!(layout.menu_button.bottom <= layout.rows[0].icon.top);
+        assert!(layout.title.right <= layout.menu_button.left);
+        let (x, y) = center(&layout.menu_button);
+        assert_eq!(layout.hit_test(x, y), Some(Hit::Menu));
     }
 
     #[test]
