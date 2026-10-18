@@ -1,6 +1,5 @@
 #![windows_subsystem = "windows"]
 
-#![allow(static_mut_refs)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
 mod win;
@@ -19,6 +18,8 @@ mod hotkeys;
 mod worker;
 mod log;
 
+use std::cell::{RefCell, RefMut};
+
 use crate::log::debug_log;
 use crate::state::AppState;
 
@@ -36,12 +37,14 @@ use crate::settings::{Settings, ThemeMode};
 use crate::actions::Action;
 use crate::layout::Hit;
 
-static mut APP_STATE: Option<AppState> = None;
-static mut RENDERER: Option<render::Renderer> = None;
-static mut HOTKEY_MANAGER: Option<hotkeys::HotkeyManager> = None;
-
-// Input state
-static mut DRAGGING_MONITOR_IDX: Option<usize> = None;
+/// Everything the window works with. `main` owns it; the window keeps a pointer to it
+/// in `GWLP_USERDATA` from `WM_NCCREATE` to `WM_NCDESTROY`. Worker threads never touch
+/// it, they only post messages.
+struct App {
+    state: AppState,
+    renderer: render::Renderer,
+    hotkeys: hotkeys::HotkeyManager,
+}
 
 /// Posted once the window is up: find the monitors and start their workers.
 const WM_APP_INIT: u32 = WM_APP;
@@ -57,47 +60,47 @@ fn main() -> Result<()> {
         let (settings, config_warning) = Settings::load();
         let system_dark = Settings::is_system_dark_mode();
         let dark = settings.theme.is_dark(system_dark);
-        APP_STATE = Some(AppState {
-            monitors: Vec::new(),
-            settings,
-            status_message: config_warning.unwrap_or_else(|| "Ready".to_string()),
-            hover_monitor_idx: None,
-            active_monitor_idx: None,
-            lock_mode: false,
-            hotkey_status: std::collections::HashMap::new(),
-            last_wheel_time: None,
-            editing_monitor: None,
-            edit_buffer: String::new(),
-            worker_generation: 0,
-            settings_dirty: false,
-            system_dark,
+        let app = RefCell::new(App {
+            state: AppState {
+                monitors: Vec::new(),
+                settings,
+                status_message: config_warning.unwrap_or_else(|| "Ready".to_string()),
+                hover_monitor_idx: None,
+                active_monitor_idx: None,
+                lock_mode: false,
+                hotkey_status: std::collections::HashMap::new(),
+                last_wheel_time: None,
+                editing_monitor: None,
+                edit_buffer: String::new(),
+                worker_generation: 0,
+                settings_dirty: false,
+                system_dark,
+            },
+            renderer: render::Renderer::new()?,
+            hotkeys: hotkeys::HotkeyManager::new(),
         });
-
-        RENDERER = Some(render::Renderer::new()?);
 
         let instance = GetModuleHandleW(None)?.into();
         let hmenu = menu::create_menu_bar()?;
-        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu), dark)?;
+        // `app` outlives the window: the loop below only ends once the window is destroyed.
+        let app_ptr = &app as *const RefCell<App> as *const std::ffi::c_void;
+        let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), Some(hmenu), dark, Some(app_ptr))?;
         // Paint now; otherwise the first WM_PAINT would wait behind WM_APP_INIT.
         let _ = UpdateWindow(hwnd);
         debug_log!("window shown after {:?}", started.elapsed());
         let _ = PostMessageW(Some(hwnd), WM_APP_INIT, WPARAM(0), LPARAM(0));
 
-        // Initialize hotkeys
-        let mut hkm = hotkeys::HotkeyManager::new();
-        if let Some(state) = APP_STATE.as_mut() {
-            hkm.register_all(hwnd, &state.settings.hotkeys);
-            hkm.sync_status(state);
-            
+        {
+            let mut guard = app.borrow_mut();
+            let App { state, hotkeys, .. } = &mut *guard;
+            hotkeys.register_all(hwnd, &state.settings.hotkeys);
+            hotkeys.sync_status(state);
+
             // A config error is more important; failed hotkeys also show as HOTKEY ERROR.
             let failed_count = state.hotkey_status.values().filter(|&&v| !v).count();
             if failed_count > 0 && state.status_message == "Ready" {
                 state.status_message = format!("Warning: {} hotkeys failed to register", failed_count);
             }
-        }
-        HOTKEY_MANAGER = Some(hkm);
-
-        if let Some(state) = APP_STATE.as_ref() {
             update_theme_menu(hwnd, state);
         }
 
@@ -111,6 +114,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// The window's `App`. `None` before `WM_NCCREATE`, after `WM_NCDESTROY`, and while a
+/// message further up the stack has it borrowed. Don't hold the borrow across calls that
+/// send messages back to the window (`SetWindowPos`, `DefWindowProcW`, `MessageBoxW`,
+/// capture and frame changes), or those messages are skipped.
+unsafe fn borrow_app<'a>(window: HWND) -> Option<RefMut<'a, App>> {
+    let cell = (GetWindowLongPtrW(window, GWLP_USERDATA) as *const RefCell<App>).as_ref()?;
+    let app = cell.try_borrow_mut();
+    if app.is_err() {
+        debug_log!("skipped a re-entrant message: the App is already borrowed");
+    }
+    app.ok()
+}
+
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 /// One-shot timer that saves settings once writes have settled.
@@ -122,10 +138,8 @@ const REFRESH_TIMER_ID: usize = 2;
 const REFRESH_DELAY_MS: u32 = 500;
 
 /// Saves monitor states if a write changed them since the last save.
-unsafe fn save_if_dirty() {
-    if let Some(state) = APP_STATE.as_mut()
-        && state.settings_dirty
-    {
+fn save_if_dirty(state: &mut AppState) {
+    if state.settings_dirty {
         state.persist_monitor_states();
         let _ = state.settings.save();
     }
@@ -133,24 +147,22 @@ unsafe fn save_if_dirty() {
 
 /// Finds the monitors and starts their workers. Only the registry and SetupDi are
 /// read here; each worker talks to its monitor on its own thread.
-unsafe fn start_monitors(window: HWND) {
+unsafe fn start_monitors(window: HWND, state: &mut AppState) {
     // Smart Restore reads the saved states, so save what the old monitors wrote first.
-    save_if_dirty();
+    save_if_dirty(state);
     let _ = KillTimer(Some(window), REFRESH_TIMER_ID);
-    DRAGGING_MONITOR_IDX = None;
-    if let Some(state) = APP_STATE.as_mut() {
-        let started = std::time::Instant::now();
-        state.replace_monitors(monitors::enumerate_monitors());
-        state.start_workers(window);
-        debug_log!("found {} monitors in {:?}", state.monitors.len(), started.elapsed());
-        let _ = InvalidateRect(Some(window), None, false);
-    }
+    let started = std::time::Instant::now();
+    state.replace_monitors(monitors::enumerate_monitors());
+    state.start_workers(window);
+    debug_log!("found {} monitors in {:?}", state.monitors.len(), started.elapsed());
+    let _ = InvalidateRect(Some(window), None, false);
 }
 
 /// Finds the monitors again (menu or display change) and reports the count.
 unsafe fn refresh_monitors(window: HWND, reason: &str) {
-    start_monitors(window);
-    if let Some(state) = APP_STATE.as_mut() {
+    if let Some(mut app) = borrow_app(window) {
+        let state = &mut app.state;
+        start_monitors(window, state);
         state.status_message = format!("{reason} (found {})", state.monitors.len());
     }
 }
@@ -165,14 +177,19 @@ unsafe fn update_theme_menu(window: HWND, state: &AppState) {
 }
 
 unsafe fn set_theme(window: HWND, theme: ThemeMode) {
-    if let Some(state) = APP_STATE.as_mut() {
-        state.settings.theme = theme;
-        let _ = state.settings.save();
-        update_theme_menu(window, state);
-        window::set_dark_title_bar(window, state.is_dark());
-        state.status_message = format!("Theme set to {:?}", theme);
-        let _ = InvalidateRect(Some(window), None, false);
-    }
+    let Some(mut app) = borrow_app(window) else {
+        return;
+    };
+    let state = &mut app.state;
+    state.settings.theme = theme;
+    let _ = state.settings.save();
+    update_theme_menu(window, state);
+    state.status_message = format!("Theme set to {:?}", theme);
+    let dark = state.is_dark();
+    drop(app);
+    // Redrawing the frame can send messages back to the window, so after the borrow.
+    window::set_dark_title_bar(window, dark);
+    let _ = InvalidateRect(Some(window), None, false);
 }
 
 /// `lparam` of `WM_SETTINGCHANGE` names what changed; "ImmersiveColorSet" covers the
@@ -185,6 +202,16 @@ unsafe fn is_color_set_change(lparam: LPARAM) -> bool {
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match message {
+            WM_NCCREATE => {
+                // The first message that carries `CreateWindowExW`'s lpParam: the `App`.
+                let create = &*(lparam.0 as *const CREATESTRUCTW);
+                SetWindowLongPtrW(window, GWLP_USERDATA, create.lpCreateParams as isize);
+                DefWindowProcW(window, message, wparam, lparam)
+            }
+            WM_NCDESTROY => {
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                DefWindowProcW(window, message, wparam, lparam)
+            }
             WM_KEYDOWN => {
                 handle_keydown(window, VIRTUAL_KEY(wparam.0 as u16));
                 LRESULT(0)
@@ -195,8 +222,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             }
             WM_KILLFOCUS => {
                 // Leaving the window commits a typed value, like clicking elsewhere.
-                if let Some(state) = APP_STATE.as_mut()
-                    && state.commit_edit()
+                if let Some(mut app) = borrow_app(window)
+                    && app.state.commit_edit()
                 {
                     let _ = InvalidateRect(Some(window), None, false);
                 }
@@ -221,7 +248,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     }
                     menu::IDM_REFRESH => refresh_monitors(window, "Monitors refreshed"),
                     menu::IDM_LOCK_MODE => {
-                        if let Some(state) = APP_STATE.as_mut() {
+                        if let Some(mut app) = borrow_app(window) {
+                            let state = &mut app.state;
                             state.lock_mode = !state.lock_mode;
                             
                             let hmenu = GetMenu(window);
@@ -240,6 +268,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_THEME_LIGHT => set_theme(window, ThemeMode::Light),
                     menu::IDM_THEME_DARK => set_theme(window, ThemeMode::Dark),
                     menu::IDM_ABOUT => {
+                        // Runs its own message loop, so the App must not be borrowed here.
                         let _ = MessageBoxW(
                             Some(window),
                             w!("Brightness Control v0.1.0\nA native Windows 11 utility."),
@@ -255,12 +284,14 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_ERASEBKGND => LRESULT(1),
             WM_SETTINGCHANGE => {
                 if is_color_set_change(lparam)
-                    && let Some(state) = APP_STATE.as_mut()
+                    && let Some(mut app) = borrow_app(window)
                 {
-                    let was_dark = state.is_dark();
-                    state.system_dark = Settings::is_system_dark_mode();
-                    if state.is_dark() != was_dark {
-                        window::set_dark_title_bar(window, state.is_dark());
+                    let was_dark = app.state.is_dark();
+                    app.state.system_dark = Settings::is_system_dark_mode();
+                    let dark = app.state.is_dark();
+                    drop(app);
+                    if dark != was_dark {
+                        window::set_dark_title_bar(window, dark);
                         let _ = InvalidateRect(Some(window), None, false);
                     }
                 }
@@ -269,20 +300,19 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(window, &mut ps);
-                if let Some(renderer) = RENDERER.as_mut() {
-                    if let Some(state) = APP_STATE.as_ref() {
-                        let _ = renderer.render(window, state);
-                    }
+                if let Some(mut app) = borrow_app(window) {
+                    let App { state, renderer, .. } = &mut *app;
+                    let _ = renderer.render(window, state);
                 }
                 let _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
             WM_SIZE => {
                 // lParam holds the new client width and height in pixels.
-                if let Some(renderer) = RENDERER.as_mut() {
+                if let Some(mut app) = borrow_app(window) {
                     let width = (lparam.0 & 0xFFFF) as u32;
                     let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
-                    renderer.resize(width, height);
+                    app.renderer.resize(width, height);
                 }
                 let _ = InvalidateRect(Some(window), None, false);
                 LRESULT(0)
@@ -324,24 +354,23 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_MOUSELEAVE => {
-                if let Some(state) = APP_STATE.as_mut() {
-                    state.hover_monitor_idx = None;
+                if let Some(mut app) = borrow_app(window) {
+                    app.state.hover_monitor_idx = None;
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                DRAGGING_MONITOR_IDX = None;
-
-                if let Some(state) = APP_STATE.as_mut() {
-                    state.active_monitor_idx = None;
+                if let Some(mut app) = borrow_app(window) {
+                    app.state.active_monitor_idx = None;
                     let _ = InvalidateRect(Some(window), None, false);
                 }
                 let _ = ReleaseCapture();
                 LRESULT(0)
             }
             worker::WM_APP_WRITE_DONE => {
-                if let Some(state) = APP_STATE.as_mut() {
+                if let Some(mut app) = borrow_app(window) {
+                    let state = &mut app.state;
                     let (generation, idx) = worker::unpack_target(wparam.0);
                     let result = worker::WriteResult::from_lparam(lparam.0);
                     if state.handle_write_result(generation, idx, result) {
@@ -356,7 +385,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER if wparam.0 == SAVE_TIMER_ID => {
                 let _ = KillTimer(Some(window), SAVE_TIMER_ID);
-                save_if_dirty();
+                if let Some(mut app) = borrow_app(window) {
+                    save_if_dirty(&mut app.state);
+                }
                 LRESULT(0)
             }
             WM_DISPLAYCHANGE => {
@@ -370,13 +401,16 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_APP_INIT => {
-                start_monitors(window);
+                if let Some(mut app) = borrow_app(window) {
+                    start_monitors(window, &mut app.state);
+                }
                 LRESULT(0)
             }
             worker::WM_APP_MONITOR_READY => {
                 // Always take the box, even for a stale generation, so it's freed.
                 let ready = worker::take_ready(lparam);
-                if let Some(state) = APP_STATE.as_mut() {
+                if let Some(mut app) = borrow_app(window) {
+                    let state = &mut app.state;
                     let (generation, idx) = worker::unpack_target(wparam.0);
                     if state.handle_monitor_ready(generation, idx, *ready) {
                         let _ = InvalidateRect(Some(window), None, false);
@@ -388,18 +422,23 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_CLOSE => {
-                save_if_dirty();
+                if let Some(mut app) = borrow_app(window) {
+                    save_if_dirty(&mut app.state);
+                }
+                // Destroys the window, which sends WM_DESTROY.
                 DefWindowProcW(window, message, wparam, lparam)
             }
             WM_ENDSESSION => {
-                if wparam.0 != 0 {
-                    save_if_dirty();
+                if wparam.0 != 0
+                    && let Some(mut app) = borrow_app(window)
+                {
+                    save_if_dirty(&mut app.state);
                 }
                 LRESULT(0)
             }
             WM_DESTROY => {
-                if let Some(hkm) = HOTKEY_MANAGER.as_mut() {
-                    hkm.unregister_all(window);
+                if let Some(mut app) = borrow_app(window) {
+                    app.hotkeys.unregister_all(window);
                 }
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -410,7 +449,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
 }
 
 unsafe fn handle_keydown(window: HWND, vk: VIRTUAL_KEY) {
-    if let Some(state) = APP_STATE.as_mut() {
+    if let Some(mut app) = borrow_app(window) {
+        let state = &mut app.state;
         let changed = match vk {
             VK_RETURN => state.commit_edit(),
             VK_ESCAPE => state.cancel_edit(),
@@ -424,16 +464,17 @@ unsafe fn handle_keydown(window: HWND, vk: VIRTUAL_KEY) {
 
 /// `unit` is a UTF-16 code unit from `WM_CHAR`; surrogates never map to a digit.
 unsafe fn handle_char(window: HWND, unit: u32) {
-    if let Some(state) = APP_STATE.as_mut()
+    if let Some(mut app) = borrow_app(window)
         && let Some(ch) = char::from_u32(unit)
-        && state.edit_input(ch)
+        && app.state.edit_input(ch)
     {
         let _ = InvalidateRect(Some(window), None, false);
     }
 }
 
 unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
-    if let Some(state) = APP_STATE.as_mut() {
+    if let Some(mut app) = borrow_app(window) {
+        let state = &mut app.state;
         if let Some(hover_idx) = state.hover_monitor_idx {
             // Rate limiting
             let now = std::time::Instant::now();
@@ -464,7 +505,8 @@ unsafe fn handle_wheel(window: HWND, delta: i16, keystate: u16) {
 }
 
 unsafe fn handle_hotkey(window: HWND, action_id: i32) {
-    if let Some(state) = APP_STATE.as_mut() {
+    if let Some(mut app) = borrow_app(window) {
+        let state = &mut app.state;
         if let Some(action) = Action::from_i32(action_id) {
             let mut targets = state.get_target_indices();
             
@@ -502,7 +544,8 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
 }
 
 unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
-    if let Some(state) = APP_STATE.as_mut() {
+    if let Some(mut app) = borrow_app(window) {
+        let state = &mut app.state;
         // Mouse coordinates are physical pixels; the layout is in DIPs.
         let dpi = GetDpiForWindow(window);
         let mut rect = RECT::default();
@@ -528,14 +571,13 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
 
         // If clicking down, find which slider or label. Monitors still being probed (or
         // that can't be controlled) ignore clicks. Clicking anywhere but the label being
-        // edited commits the typed value.
+        // edited commits the typed value. Pressing on a track starts a drag.
         if is_down {
             let hit = hit.filter(|h| state.monitors.get(h.index()).is_some_and(|m| m.accepts_input()));
             match hit {
                 Some(Hit::Value(idx)) => state.begin_edit(idx),
                 Some(Hit::Track(idx)) => {
                     state.commit_edit();
-                    DRAGGING_MONITOR_IDX = Some(idx);
                     state.active_monitor_idx = Some(idx);
                 }
                 None => {
@@ -546,7 +588,7 @@ unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
         }
 
         // Processing movement/drag
-        if let Some(idx) = DRAGGING_MONITOR_IDX {
+        if let Some(idx) = state.active_monitor_idx {
             let (Some(row), Some(old_value)) = (layout.rows.get(idx), state.monitors.get(idx).map(|m| m.ui_value)) else {
                 return;
             };

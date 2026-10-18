@@ -41,7 +41,10 @@ A native, professional Windows brightness controller for power users and multi-m
   - workers talk to the window thread only through `PostMessageW`,
   - they never touch UI or app state,
   - the window thread never blocks on monitor I/O.
-- **No global mutable state.** Keep app state in a struct reached through the window (`GWLP_USERDATA`). *(Currently `static mut` → fix plan #19.)*
+- **No global mutable state.** Everything lives in `main.rs`'s `App` (`AppState`, `Renderer`, `HotkeyManager`), owned by `main` in a `RefCell`:
+  - the window gets a pointer to it through `CreateWindowExW`'s `lpParam`, stores it in `GWLP_USERDATA` on `WM_NCCREATE` and clears it on `WM_NCDESTROY`,
+  - handlers reach it with `borrow_app(window)`, which returns `None` if a message further up the stack already holds it (logged as a skipped re-entrant message),
+  - so never hold the borrow across calls that send messages back to the window: `SetWindowPos`, `DefWindowProcW` (e.g. `WM_CLOSE` → `WM_DESTROY`), `MessageBoxW`, `SetCapture`/`ReleaseCapture`, `BeginPaint`, `DwmSetWindowAttribute`. `InvalidateRect`, `SetTimer` and `PostMessageW` are fine.
 - **Errors:**
   - failing silently is acceptable,
   - **never crash because of a misbehaving monitor**,
@@ -69,7 +72,7 @@ The release binary was 221,696 bytes (about 217 KB) at commit `7e277cf`. Check t
 
 ```
 src/
-├─ main.rs        Entry point, message loop, wnd_proc, input/hotkey/wheel/numeric handlers
+├─ main.rs        Entry point, App (window-owned state), message loop, wnd_proc, input/hotkey/wheel/numeric handlers
 ├─ win.rs         COM init (STA) + DPI awareness (Per-Monitor V2)
 ├─ window.rs      Window class registration + CreateWindowExW
 ├─ menu.rs        Native menu bar and command IDs

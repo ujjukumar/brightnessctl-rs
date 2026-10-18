@@ -180,6 +180,7 @@ pub struct AppState {
     pub settings: Settings,
     pub status_message: String,
     pub hover_monitor_idx: Option<usize>,
+    /// The slider being dragged: set when a track is pressed, cleared on release.
     pub active_monitor_idx: Option<usize>,
     pub lock_mode: bool,
     pub hotkey_status: HashMap<Action, bool>,

@@ -445,9 +445,15 @@ Tasks:
 
 ## Phase 7: Code structure and tests
 
-- [ ] **19. Remove the global state.** Replace the `static mut` globals (`main.rs:32-37`) with an `App` struct. Pass it through `CreateWindowExW`'s `lpParam`, store it in `GWLP_USERDATA` during `WM_NCCREATE`, and fetch it in `wnd_proc`. Remove `#![allow(static_mut_refs)]`.
+- [x] **19. Remove the global state.** Replace the `static mut` globals (`main.rs:32-37`) with an `App` struct. Pass it through `CreateWindowExW`'s `lpParam`, store it in `GWLP_USERDATA` during `WM_NCCREATE`, and fetch it in `wnd_proc`. Remove `#![allow(static_mut_refs)]`.
   - Don't hold a `&mut App` across calls that run their own message loop, such as `MessageBoxW` in About.
   - Worker threads never touch `App`; they only post messages.
+  - *Result:*
+    - `App { state, renderer, hotkeys }` lives in a `RefCell` owned by `main`, which outlives the window (the message loop ends only after `WM_DESTROY`). `window::create` passes its address as `lpParam`; `WM_NCCREATE` stores it in `GWLP_USERDATA` and `WM_NCDESTROY` clears it.
+    - Handlers use `borrow_app(window)`, which uses `try_borrow_mut`: a message that arrives while another handler holds the `App` is skipped and logged instead of creating a second `&mut`. Borrows end before `SetWindowPos`, `DefWindowProcW`, `MessageBoxW`, `SetCapture`/`ReleaseCapture`, `BeginPaint` and the DWM title-bar call.
+    - `DRAGGING_MONITOR_IDX` was always equal to `active_monitor_idx`, so it's gone.
+    - All four `static mut`s and `#![allow(static_mut_refs)]` are removed. On exit, dropping `App` now stops and joins the workers.
+    - Checked edit, drag, theme, `WM_SETTINGCHANGE`, display-change and save scripts: no skipped messages in the log, exit code 0, startup unchanged.
 - [x] **20.** Layout defined twice: done in item 3.
 - [x] **21.** Brightness stored in several places: done in item 6.
 - [ ] **22. Remove unused code and warnings.**

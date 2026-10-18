@@ -29,12 +29,14 @@ pub fn set_dark_title_bar(hwnd: HWND, dark: bool) {
     }
 }
 
+/// `param` reaches `wnd_proc` in `WM_NCCREATE` (`CREATESTRUCTW::lpCreateParams`).
 pub unsafe fn create(
     instance: HINSTANCE, 
     title: &str, 
     wnd_proc: WNDPROC,
     menu: Option<HMENU>,
     dark: bool,
+    param: Option<*const std::ffi::c_void>,
 ) -> Result<HWND> {
     let class_name = w!("BrightnessCtlWindow");
     
@@ -77,7 +79,7 @@ pub unsafe fn create(
         None,
         menu,
         Some(instance),
-        None,
+        param,
     )?;
 
     if hwnd.0.is_null() {
@@ -129,7 +131,7 @@ mod tests {
     fn test_window_creation() {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
-            let result = create(instance, "Test Window", Some(test_wndproc), None, false);
+            let result = create(instance, "Test Window", Some(test_wndproc), None, false, None);
             assert!(result.is_ok(), "Window creation failed: {:?}", result.err());
             let hwnd = result.unwrap();
             assert!(!hwnd.0.is_null());
