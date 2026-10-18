@@ -3,21 +3,27 @@ use windows::core::{Interface, Result, w};
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::{
+    ID2D1Bitmap,
     ID2D1Factory,
     ID2D1HwndRenderTarget,
     ID2D1RenderTarget,
     ID2D1SolidColorBrush,
     D2D1CreateFactory,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_BITMAP_PROPERTIES,
     D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_NONE,
 };
 use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED,
     D2D1_COLOR_F,
+    D2D1_PIXEL_FORMAT,
     D2D_SIZE_U,
     D2D_RECT_F,
 };
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Direct2D::{D2D1_ELLIPSE, D2D1_ROUNDED_RECT};
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory,
@@ -35,6 +41,7 @@ use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
 use crate::state::Backend;
+use crate::background::{self, Picture};
 
 pub struct ColorPalette {
     pub bg: D2D1_COLOR_F,
@@ -80,6 +87,9 @@ pub struct Renderer {
     current_theme_is_dark: Option<bool>,
     /// DPI the render target currently draws at; 0 when there is no render target.
     dpi: u32,
+    /// The decoded background picture, kept so the bitmap can be rebuilt after a device loss.
+    background: Option<Picture>,
+    background_bitmap: Option<ID2D1Bitmap>,
 }
 
 impl Renderer {
@@ -105,6 +115,8 @@ impl Renderer {
                 brush_fill: None,
                 current_theme_is_dark: None,
                 dpi: 0,
+                background: None,
+                background_bitmap: None,
             })
         }
     }
@@ -221,7 +233,19 @@ impl Renderer {
     unsafe fn discard_device_resources(&mut self) {
         self.render_target = None;
         self.drop_brushes();
+        self.background_bitmap = None;
         self.dpi = 0;
+    }
+
+    /// Replaces the background picture; `None` goes back to the plain theme color.
+    pub fn set_background(&mut self, picture: Option<Picture>) {
+        self.background = picture;
+        self.background_bitmap = None;
+    }
+
+    /// Whether the background (if any) is big enough for a client of `width` x `height` pixels.
+    pub fn background_covers(&self, width: u32, height: u32) -> bool {
+        self.background.as_ref().is_none_or(|picture| picture.covers(width, height))
     }
 
     /// Resizes the drawing surface to the new client size in pixels (from `WM_SIZE`).
@@ -257,8 +281,44 @@ impl Renderer {
 
             let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
 
+            if self.background_bitmap.is_none()
+                && let Some(picture) = &self.background
+            {
+                let properties = D2D1_BITMAP_PROPERTIES {
+                    pixelFormat: D2D1_PIXEL_FORMAT {
+                        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                    },
+                    // One bitmap DIP per pixel; `crop` works in these units.
+                    dpiX: 96.0,
+                    dpiY: 96.0,
+                };
+                self.background_bitmap = rt
+                    .CreateBitmap(
+                        D2D_SIZE_U { width: picture.width, height: picture.height },
+                        Some(picture.pixels.as_ptr().cast()),
+                        picture.width * 4,
+                        &properties,
+                    )
+                    .ok();
+            }
+
             rt.BeginDraw();
             rt.Clear(Some(&palette.bg));
+
+            // Drawn faded over the theme color, which works as the dim layer.
+            if let Some(bitmap) = &self.background_bitmap {
+                let picture = bitmap.GetSize();
+                let source = background::crop(picture.width, picture.height, size.width, size.height);
+                let window = D2D_RECT_F { left: 0.0, top: 0.0, right: size.width, bottom: size.height };
+                rt.DrawBitmap(
+                    bitmap,
+                    Some(&window),
+                    1.0 - state.settings.background_dim,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    Some(&source),
+                );
+            }
 
             draw_sun(&rt, &layout.title_icon, self.brush_accent.as_ref().unwrap());
 

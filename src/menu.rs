@@ -8,6 +8,8 @@ pub const IDM_THEME_LIGHT: u16 = 104;
 pub const IDM_THEME_DARK: u16 = 105;
 pub const IDM_ABOUT: u16 = 106;
 pub const IDM_LOCK_MODE: u16 = 107;
+pub const IDM_BACKGROUND_PICK: u16 = 108;
+pub const IDM_BACKGROUND_REMOVE: u16 = 109;
 
 pub unsafe fn create_menu_bar() -> Result<HMENU> {
     let hmenu = CreateMenu()?;
@@ -21,6 +23,9 @@ pub unsafe fn create_menu_bar() -> Result<HMENU> {
     let hview = CreatePopupMenu()?;
     AppendMenuW(hview, MF_STRING, IDM_REFRESH as usize, w!("Refresh Monitors"))?;
     AppendMenuW(hview, MF_STRING, IDM_LOCK_MODE as usize, w!("Sync All Monitors (Lock)"))?;
+    AppendMenuW(hview, MF_SEPARATOR, 0, None)?;
+    AppendMenuW(hview, MF_STRING, IDM_BACKGROUND_PICK as usize, w!("Background Image..."))?;
+    AppendMenuW(hview, MF_STRING, IDM_BACKGROUND_REMOVE as usize, w!("Remove Background"))?;
     AppendMenuW(hmenu, MF_POPUP, hview.0 as usize, w!("&View"))?;
 
     // Theme Menu

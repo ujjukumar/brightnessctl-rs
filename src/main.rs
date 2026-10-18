@@ -18,6 +18,7 @@ mod hotkeys;
 mod worker;
 mod log;
 mod instance;
+mod background;
 
 use std::cell::{RefCell, RefMut};
 
@@ -46,6 +47,8 @@ struct App {
     state: AppState,
     renderer: render::Renderer,
     hotkeys: hotkeys::HotkeyManager,
+    /// Bumped by every `load_background`; only the newest decode result is used.
+    background_generation: usize,
 }
 
 /// Posted once the window is up: find the monitors and start their workers.
@@ -85,6 +88,7 @@ fn main() -> Result<()> {
             },
             renderer: render::Renderer::new()?,
             hotkeys: hotkeys::HotkeyManager::new(),
+            background_generation: 0,
         });
 
         let instance = GetModuleHandleW(None)?.into();
@@ -143,6 +147,10 @@ const SAVE_DELAY_MS: u32 = 1000;
 /// One-shot timer that refreshes the monitors once a burst of display changes settles.
 const REFRESH_TIMER_ID: usize = 2;
 const REFRESH_DELAY_MS: u32 = 500;
+
+/// One-shot timer that decodes the background again once the window stops growing.
+const BACKGROUND_TIMER_ID: usize = 3;
+const BACKGROUND_DELAY_MS: u32 = 300;
 
 /// Saves monitor states if a write changed them since the last save.
 fn save_if_dirty(state: &mut AppState) {
@@ -204,6 +212,41 @@ unsafe fn set_theme(window: HWND, theme: ThemeMode) {
 unsafe fn is_color_set_change(lparam: LPARAM) -> bool {
     let name = PCWSTR(lparam.0 as *const u16);
     !name.is_null() && name.as_wide() == w!("ImmersiveColorSet").as_wide()
+}
+
+unsafe fn client_size(window: HWND) -> (u32, u32) {
+    let mut rect = RECT::default();
+    let _ = GetClientRect(window, &mut rect);
+    ((rect.right - rect.left).max(1) as u32, (rect.bottom - rect.top).max(1) as u32)
+}
+
+/// Starts decoding the configured background at the current client size, or clears it.
+/// The picture shows up with `WM_APP_BACKGROUND_READY`; until then the old one stays.
+unsafe fn load_background(window: HWND, app: &mut App) {
+    app.background_generation = app.background_generation.wrapping_add(1);
+    let _ = KillTimer(Some(window), BACKGROUND_TIMER_ID);
+    match app.state.settings.background_image.clone() {
+        Some(path) => {
+            let (width, height) = client_size(window);
+            background::load(window, app.background_generation, path, width, height);
+        }
+        None => app.renderer.set_background(None),
+    }
+}
+
+/// Stores the new background path, saves it and starts loading the picture.
+unsafe fn set_background(window: HWND, path: Option<std::path::PathBuf>) {
+    let Some(mut app) = borrow_app(window) else {
+        return;
+    };
+    app.state.status_message = match &path {
+        Some(path) => format!("Background: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+        None => "Background removed".to_string(),
+    };
+    app.state.settings.background_image = path;
+    let _ = app.state.settings.save();
+    load_background(window, &mut app);
+    let _ = InvalidateRect(Some(window), None, false);
 }
 
 extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -274,6 +317,15 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     menu::IDM_THEME_AUTO => set_theme(window, ThemeMode::Auto),
                     menu::IDM_THEME_LIGHT => set_theme(window, ThemeMode::Light),
                     menu::IDM_THEME_DARK => set_theme(window, ThemeMode::Dark),
+                    menu::IDM_BACKGROUND_PICK => {
+                        let current = borrow_app(window)
+                            .and_then(|app| app.state.settings.background_image.clone());
+                        // The dialog runs its own message loop, so the App must not be borrowed here.
+                        if let Some(path) = background::pick_file(window, current.as_deref()) {
+                            set_background(window, Some(path));
+                        }
+                    }
+                    menu::IDM_BACKGROUND_REMOVE => set_background(window, None),
                     menu::IDM_ABOUT => {
                         // Runs its own message loop, so the App must not be borrowed here.
                         let _ = MessageBoxW(
@@ -320,6 +372,10 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                     let width = (lparam.0 & 0xFFFF) as u32;
                     let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                     app.renderer.resize(width, height);
+                    // A bigger window needs a bigger copy of the picture; wait for the drag to end.
+                    if !app.renderer.background_covers(width, height) {
+                        SetTimer(Some(window), BACKGROUND_TIMER_ID, BACKGROUND_DELAY_MS, None);
+                    }
                 }
                 let _ = InvalidateRect(Some(window), None, false);
                 LRESULT(0)
@@ -407,9 +463,38 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 refresh_monitors(window, "Displays changed");
                 LRESULT(0)
             }
+            WM_TIMER if wparam.0 == BACKGROUND_TIMER_ID => {
+                if let Some(mut app) = borrow_app(window) {
+                    load_background(window, &mut app);
+                }
+                LRESULT(0)
+            }
             WM_APP_INIT => {
                 if let Some(mut app) = borrow_app(window) {
                     start_monitors(window, &mut app.state);
+                    load_background(window, &mut app);
+                }
+                LRESULT(0)
+            }
+            background::WM_APP_BACKGROUND_READY => {
+                // Always take the box, even for a stale generation, so it's freed.
+                let loaded = background::take_loaded(lparam);
+                if let Some(mut app) = borrow_app(window)
+                    && wparam.0 == app.background_generation
+                {
+                    match *loaded {
+                        Ok(picture) => app.renderer.set_background(Some(picture)),
+                        Err(err) => {
+                            app.renderer.set_background(None);
+                            app.state.status_message = format!("Background image not loaded: {}", err.trim_end());
+                        }
+                    }
+                    // The window may have grown while the picture was decoding.
+                    let (width, height) = client_size(window);
+                    if !app.renderer.background_covers(width, height) {
+                        SetTimer(Some(window), BACKGROUND_TIMER_ID, BACKGROUND_DELAY_MS, None);
+                    }
+                    let _ = InvalidateRect(Some(window), None, false);
                 }
                 LRESULT(0)
             }
