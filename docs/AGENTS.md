@@ -256,7 +256,7 @@ The backend is chosen **once per monitor** by its worker (`brightness::with_prob
 
 - `Action` values (`StepUp = 1`, `StepDown = 2`, `CyclePresets = 3`) are used as the `RegisterHotKey` IDs.
 - **Registration failures:** that hotkey is disabled, the failure shows in the status bar, and it isn't retried until restart or a config change.
-- Hotkeys are unregistered on exit *(→ fix plan #17)*.
+- Hotkeys are unregistered on exit (`HotkeyManager::unregister_all` in `WM_DESTROY`).
 
 **Targeting** (hotkeys):
 - Sync mode on → all monitors.

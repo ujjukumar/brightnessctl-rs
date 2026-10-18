@@ -378,6 +378,9 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_DESTROY => {
+                if let Some(hkm) = HOTKEY_MANAGER.as_mut() {
+                    hkm.unregister_all(window);
+                }
                 PostQuitMessage(0);
                 LRESULT(0)
             }

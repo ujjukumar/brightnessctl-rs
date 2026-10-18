@@ -429,7 +429,8 @@ Tasks:
     - Tests: endpoints, every percent round trips for max 100 and 255, every raw level round trips for max 50 (percents within 1), rounding cases, clamping.
     - Both desktop monitors report 0–100, so they behave exactly as before (hardware tests pass, writes confirmed).
 - [x] ~~**16. Stable hash**~~: moved into item 1.
-- [ ] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
+- [x] **17. Hotkeys.** Call `HotkeyManager::unregister_all` in `WM_DESTROY` (`hotkeys.rs:34` is never called today).
+  - *Result:* `WM_DESTROY` unregisters every hotkey before quitting. The empty `Drop` impl (it only held a comment about this) is gone. A unit test registers a free key combination on the test thread, shows a second registration fails while it's held, and succeeds again after `unregister_all`. The app still closes cleanly with exit code 0.
 - [ ] **18. Refresh.**
   - ~~Make `IDM_REFRESH` (`main.rs:159-173`) stop and join the worker threads, find the monitors again, and use the startup path, including Smart Restore.~~ Done in item 9 (`start_monitors`).
   - Reset the hover, active, editing and drag indexes.
