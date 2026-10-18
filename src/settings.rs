@@ -178,7 +178,9 @@ impl Settings {
             Err(err) => return (Self::default(), Some(format!("Config unreadable ({err}); using defaults"))),
         };
 
-        match serde_json::from_slice::<Settings>(&bytes) {
+        // Some editors (and PowerShell 5) save UTF-8 with a byte order mark.
+        let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+        match serde_json::from_slice::<Settings>(json) {
             Ok(mut settings) => {
                 settings.sanitize();
                 (settings, None)
@@ -347,6 +349,17 @@ mod tests {
 
         fs::write(&path, "{}").unwrap();
         assert_eq!(Settings::load_from(&path).0, Settings::default());
+    }
+
+    #[test]
+    fn test_utf8_byte_order_mark_is_accepted() {
+        let path = test_dir("bom").join(CONFIG_FILE_NAME);
+
+        fs::write(&path, b"\xEF\xBB\xBF{ \"theme\": \"Light\" }").unwrap();
+        let (settings, warning) = Settings::load_from(&path);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(settings.theme, ThemeMode::Light);
+        assert!(!backup_path(&path).exists());
     }
 
     #[test]
