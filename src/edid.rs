@@ -1,6 +1,15 @@
 use crate::state::MonitorIdentity;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+
+/// 64-bit FNV-1a. Fallback identities are persisted in the config file, so the hash
+/// must never change; `DefaultHasher` makes no such guarantee across Rust releases.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
 
 pub fn parse_identity(edid: &[u8]) -> Option<MonitorIdentity> {
     if edid.len() < 128 { return None; }
@@ -63,10 +72,8 @@ pub fn parse_identity(edid: &[u8]) -> Option<MonitorIdentity> {
     let is_fallback = serial_str.is_empty() || serial_str == "0";
     
     if is_fallback {
-        let mut hasher = DefaultHasher::new();
-        edid.hash(&mut hasher);
-        let hash = hasher.finish();
-        serial_str = format!("{:x}", hash);
+        // Only the 128-byte base block identifies the panel; extension blocks are not hashed.
+        serial_str = format!("{:x}", fnv1a64(&edid[..128]));
     }
     
     Some(MonitorIdentity {
@@ -108,7 +115,7 @@ mod tests {
         assert_eq!(ident.manufacturer_id, "DEL");
         assert_eq!(ident.product_code, 0xA050);
         assert_eq!(ident.serial, "12345678");
-        assert_eq!(ident.is_fallback, false);
+        assert!(!ident.is_fallback);
     }
 
     #[test]
@@ -140,7 +147,7 @@ mod tests {
         let ident = parse_identity(&edid).unwrap();
         assert_eq!(ident.manufacturer_id, "ABC");
         assert_eq!(ident.serial, "SN123");
-        assert_eq!(ident.is_fallback, false);
+        assert!(!ident.is_fallback);
     }
 
     #[test]
@@ -153,12 +160,34 @@ mod tests {
         let ident2 = parse_identity(&edid).unwrap();
         
         assert_eq!(ident1.manufacturer_id, "DEL");
-        assert_eq!(ident1.is_fallback, true);
+        assert!(ident1.is_fallback);
         assert_eq!(ident1.serial, ident2.serial); // Determinism
         
         // Change one byte
         edid[127] = 0xFF;
         let ident3 = parse_identity(&edid).unwrap();
         assert_ne!(ident1.serial, ident3.serial); // Sensitivity
+    }
+
+    #[test]
+    fn test_fnv1a64_known_vectors() {
+        assert_eq!(fnv1a64(b""), 0xcbf29ce484222325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63dc4c8601ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x85944171f73967e8);
+    }
+
+    #[test]
+    fn test_fallback_serial_hashes_base_block_only() {
+        let mut edid = vec![0u8; 256];
+        edid[0x08] = 0x10; // "DEL"
+        edid[0x09] = 0xAC;
+
+        let ident = parse_identity(&edid).unwrap();
+        assert!(ident.is_fallback);
+        assert_eq!(ident.serial, format!("{:x}", fnv1a64(&edid[..128])));
+
+        // Extension block contents do not change the identity.
+        edid[200] = 0xFF;
+        assert_eq!(parse_identity(&edid).unwrap().serial, ident.serial);
     }
 }

@@ -1,6 +1,6 @@
 ﻿use crate::state::AppState;
 use windows::core::{Interface, Result, w};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
 use windows_numerics::Vector2;
 use windows::Win32::Graphics::Direct2D::{
     ID2D1Factory,
@@ -30,7 +30,10 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_MEASURING_MODE_NATURAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
+use crate::layout;
 
 pub struct ColorPalette {
     pub bg: D2D1_COLOR_F,
@@ -70,7 +73,12 @@ pub struct Renderer {
     brush_fg: Option<ID2D1SolidColorBrush>,
     brush_accent: Option<ID2D1SolidColorBrush>,
     brush_subdued: Option<ID2D1SolidColorBrush>,
+    /// Slider track and fill; recolored per row with `SetColor` for hover and active.
+    brush_track: Option<ID2D1SolidColorBrush>,
+    brush_fill: Option<ID2D1SolidColorBrush>,
     current_theme_is_dark: Option<bool>,
+    /// DPI the render target currently draws at; 0 when there is no render target.
+    dpi: u32,
 }
 
 impl Renderer {
@@ -92,7 +100,10 @@ impl Renderer {
                 brush_fg: None,
                 brush_accent: None,
                 brush_subdued: None,
+                brush_track: None,
+                brush_fill: None,
                 current_theme_is_dark: None,
+                dpi: 0,
             })
         }
     }
@@ -103,10 +114,7 @@ impl Renderer {
         }
 
         if self.current_theme_is_dark != Some(is_dark) {
-             self.brush_bg = None;
-             self.brush_fg = None;
-             self.brush_accent = None;
-             self.brush_subdued = None;
+            self.drop_brushes();
         }
 
         let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
@@ -120,8 +128,14 @@ impl Renderer {
                 height: (rect.bottom - rect.top) as u32,
             };
 
+            // Draw at the window's DPI so all coordinates are DIPs.
+            let dpi = GetDpiForWindow(hwnd);
             let hwnd_rt = self.d2d_factory.CreateHwndRenderTarget(
-                &D2D1_RENDER_TARGET_PROPERTIES::default(),
+                &D2D1_RENDER_TARGET_PROPERTIES {
+                    dpiX: dpi as f32,
+                    dpiY: dpi as f32,
+                    ..Default::default()
+                },
                 &D2D1_HWND_RENDER_TARGET_PROPERTIES {
                     hwnd,
                     pixelSize: size,
@@ -129,6 +143,7 @@ impl Renderer {
                 },
             )?;
             self.render_target = Some(hwnd_rt);
+            self.dpi = dpi;
         }
 
         let rt: ID2D1RenderTarget = self.render_target.as_ref().unwrap().cast()?;
@@ -144,6 +159,12 @@ impl Renderer {
         }
         if self.brush_subdued.is_none() {
             self.brush_subdued = Some(rt.CreateSolidColorBrush(&palette.subdued, None)?);
+        }
+        if self.brush_track.is_none() {
+            self.brush_track = Some(rt.CreateSolidColorBrush(&palette.subdued, None)?);
+        }
+        if self.brush_fill.is_none() {
+            self.brush_fill = Some(rt.CreateSolidColorBrush(&palette.accent, None)?);
         }
 
         if self.text_format_title.is_none() {
@@ -186,62 +207,70 @@ impl Renderer {
         Ok(())
     }
 
-    unsafe fn discard_resources(&mut self) {
-        self.render_target = None;
+    fn drop_brushes(&mut self) {
         self.brush_bg = None;
         self.brush_fg = None;
         self.brush_accent = None;
         self.brush_subdued = None;
-        self.text_format_title = None;
-        self.text_format_body = None;
-        self.text_format_label = None;
-        self.current_theme_is_dark = None;
+        self.brush_track = None;
+        self.brush_fill = None;
+    }
+
+    /// Drops everything tied to the GPU device. Text formats are device-independent and kept.
+    unsafe fn discard_device_resources(&mut self) {
+        self.render_target = None;
+        self.drop_brushes();
+        self.dpi = 0;
+    }
+
+    /// Resizes the drawing surface to the new client size in pixels (from `WM_SIZE`).
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if let Some(rt) = &self.render_target {
+            unsafe {
+                let _ = rt.Resize(&D2D_SIZE_U { width, height });
+            }
+        }
     }
 
     pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
-            let is_dark = state.settings.is_dark_mode();
+            let is_dark = state.is_dark();
             if self.create_resources(hwnd, is_dark).is_err() {
-                self.discard_resources();
+                self.discard_device_resources();
                 self.create_resources(hwnd, is_dark)?;
             }
 
             let rt_hwnd = self.render_target.as_ref().unwrap();
             let rt: ID2D1RenderTarget = rt_hwnd.cast()?;
 
-            let mut rect = RECT::default();
-            GetClientRect(hwnd, &mut rect)?;
-            let _ = rt_hwnd.Resize(&D2D_SIZE_U {
-                width: (rect.right - rect.left) as u32,
-                height: (rect.bottom - rect.top) as u32,
-            });
+            // The window may have moved to a monitor with a different scale factor.
+            let dpi = GetDpiForWindow(hwnd);
+            if dpi != 0 && dpi != self.dpi {
+                rt.SetDpi(dpi as f32, dpi as f32);
+                self.dpi = dpi;
+            }
+
+            // GetSize reports DIPs, matching what input handling computes from pixels.
+            let size = rt.GetSize();
+            let layout = layout::compute(size.width, size.height, state.monitors.len());
 
             let palette = if is_dark { ColorPalette::dark() } else { ColorPalette::light() };
 
             rt.BeginDraw();
             rt.Clear(Some(&palette.bg));
 
-            let margin_x = 24.0;
-            let mut y = 24.0;
-
             // App Title
             let title = w!("Brightness Control");
             rt.DrawText(
                 title.as_wide(),
                 self.text_format_title.as_ref().unwrap(),
-                &D2D_RECT_F {
-                    left: margin_x,
-                    top: y,
-                    right: rect.right as f32 - margin_x,
-                    bottom: y + 32.0,
-                },
+                &layout.title,
                 self.brush_fg.as_ref().unwrap(),
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
-            y += 48.0;
 
-            for (i, monitor) in state.monitors.iter().enumerate() {
+            for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
                 // Monitor Name (Label)
                 let display_name = if let Some(ident) = &monitor.identity {
                     format!("{} {}", ident.manufacturer_id, ident.serial)
@@ -249,33 +278,20 @@ impl Renderer {
                     monitor.name.clone()
                 };
 
-                let ddc_status = if monitor.is_disabled {
-                    "Disabled"
-                } else if monitor.write_confirmed {
-                    "DDC Active"
-                } else {
-                    "High-level"
-                };
-
-                let label_text = format!("{} â€¢ {}", display_name, ddc_status);
+                let label_text = format!("{} \u{2022} {}", display_name, monitor.status_label());
                 let name: Vec<u16> = label_text.encode_utf16().collect();
                 
                 rt.DrawText(
                     &name,
                     self.text_format_label.as_ref().unwrap(),
-                    &D2D_RECT_F {
-                        left: margin_x,
-                        top: y,
-                        right: rect.right as f32 - margin_x - 60.0,
-                        bottom: y + 16.0,
-                    },
+                    &row.label,
                     self.brush_subdued.as_ref().unwrap(),
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
                 
                 // Brightness percentage (right aligned)
-                let brightness_normalized = state.brightness[i];
+                let brightness_normalized = monitor.ui_value;
                 let is_editing = state.editing_monitor == Some(i);
                 let (pct_text, brush) = if is_editing {
                     (format!("{}|", state.edit_buffer), self.brush_accent.as_ref().unwrap())
@@ -284,38 +300,24 @@ impl Renderer {
                 };
 
                 let pct_text_wide: Vec<u16> = pct_text.encode_utf16().collect();
-                let label_rect = D2D_RECT_F {
-                    left: rect.right as f32 - margin_x - 60.0,
-                    top: y,
-                    right: rect.right as f32 - margin_x,
-                    bottom: y + 16.0,
-                };
 
                 if is_editing {
-                    rt.DrawRectangle(&label_rect, self.brush_accent.as_ref().unwrap(), 1.0, None);
+                    rt.DrawRectangle(&row.value, self.brush_accent.as_ref().unwrap(), 1.0, None);
                 }
 
-                rt.DrawText(
-                    &pct_text_wide,
-                    self.text_format_label.as_ref().unwrap(),
-                    &label_rect,
-                    brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
-
-                y += 24.0;
+                // No value is known until the worker has probed the monitor.
+                if monitor.ready {
+                    rt.DrawText(
+                        &pct_text_wide,
+                        self.text_format_label.as_ref().unwrap(),
+                        &row.value,
+                        brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
 
                 // Slider Track
-                let slider_height = 4.0;
-                let slider_width = rect.right as f32 - 2.0 * margin_x;
-                let track_rect = D2D_RECT_F {
-                    left: margin_x,
-                    top: y + 8.0,
-                    right: margin_x + slider_width,
-                    bottom: y + 8.0 + slider_height,
-                };
-                
                 let is_hovered = state.hover_monitor_idx == Some(i);
                 let is_active = state.active_monitor_idx == Some(i);
 
@@ -324,56 +326,49 @@ impl Renderer {
                 } else {
                     palette.subdued
                 };
-                let track_brush = rt.CreateSolidColorBrush(&track_color, None)?;
-                rt.FillRectangle(&track_rect, &track_brush);
+                let track_brush = self.brush_track.as_ref().unwrap();
+                track_brush.SetColor(&track_color);
+                rt.FillRectangle(&row.track, track_brush);
+
+                if !monitor.ready {
+                    continue;
+                }
 
                 // Slider Fill
-                let fill_width = slider_width * brightness_normalized;
-                let fill_rect = D2D_RECT_F {
-                    left: margin_x,
-                    top: track_rect.top,
-                    right: margin_x + fill_width,
-                    bottom: track_rect.bottom,
-                };
+                let thumb_x = layout::thumb_x(&row.track, brightness_normalized);
+                let fill_rect = D2D_RECT_F { right: thumb_x, ..row.track };
                 
                 let accent_color = if is_active {
                      D2D1_COLOR_F { r: palette.accent.r + 0.1, g: palette.accent.g + 0.1, b: palette.accent.b + 0.1, a: 1.0 }
                 } else {
                      palette.accent
                 };
-                let accent_brush = rt.CreateSolidColorBrush(&accent_color, None)?;
-                rt.FillRectangle(&fill_rect, &accent_brush);
+                let fill_brush = self.brush_fill.as_ref().unwrap();
+                fill_brush.SetColor(&accent_color);
+                rt.FillRectangle(&fill_rect, fill_brush);
 
                 // Thumb
                 let thumb_radius = if is_active { 10.0 } else if is_hovered { 9.0 } else { 8.0 };
                 rt.FillEllipse(
                     &D2D1_ELLIPSE {
                         point: Vector2 {
-                            X: margin_x + fill_width,
-                            Y: track_rect.top + slider_height / 2.0,
+                            X: thumb_x,
+                            Y: (row.track.top + row.track.bottom) / 2.0,
                         },
                         radiusX: thumb_radius,
                         radiusY: thumb_radius,
                     },
                     self.brush_fg.as_ref().unwrap(),
                 );
-
-                y += 48.0; // Spacing between monitors
             }
 
             // Status Bar at the bottom
-            let status_bar_height = 24.0;
-            let status_rect = D2D_RECT_F {
-                left: 0.0,
-                top: rect.bottom as f32 - status_bar_height,
-                right: rect.right as f32,
-                bottom: rect.bottom as f32,
-            };
+            let status_rect = layout.status_bar;
             
             // Subtle separator line
             rt.DrawLine(
-                Vector2 { X: 0.0, Y: status_rect.top },
-                Vector2 { X: rect.right as f32, Y: status_rect.top },
+                Vector2 { X: status_rect.left, Y: status_rect.top },
+                Vector2 { X: status_rect.right, Y: status_rect.top },
                 self.brush_subdued.as_ref().unwrap(),
                 1.0,
                 None,
@@ -402,9 +397,9 @@ impl Renderer {
                     &status_text,
                     self.text_format_label.as_ref().unwrap(),
                     &D2D_RECT_F {
-                        left: 8.0,
+                        left: status_rect.left + 8.0,
                         top: status_rect.top + 4.0,
-                        right: rect.right as f32 - 8.0,
+                        right: status_rect.right - 8.0,
                         bottom: status_rect.bottom,
                     },
                     self.brush_subdued.as_ref().unwrap(),
@@ -414,46 +409,40 @@ impl Renderer {
             }
 
             // Overlay Tooltip
-            if let Some(idx) = state.hover_monitor_idx {
-                if let Some(m) = state.monitors.get(idx) {
-                    let mut tooltip_text = format!("Name: {}\nRange: {} - {}\nPath: {}", m.name, m.hardware_min, m.hardware_max, m.device_path);
-                    if let Some(ident) = &m.identity {
-                        tooltip_text.push_str(&format!("\nMFG: {}\nCode: {}\nSerial: {}", ident.manufacturer_id, ident.product_code, ident.serial));
-                    }
-                    let text_wide: Vec<u16> = tooltip_text.encode_utf16().collect();
-
-                    let tt_width = 300.0;
-                    let tt_height = 100.0;
-                    let tt_x = margin_x;
-                    let tt_y = rect.bottom as f32 - status_bar_height - tt_height - 8.0;
-
-                    let tt_rect = D2D_RECT_F {
-                        left: tt_x,
-                        top: tt_y,
-                        right: tt_x + tt_width,
-                        bottom: tt_y + tt_height,
-                    };
-
-                    rt.FillRectangle(&tt_rect, self.brush_bg.as_ref().unwrap());
-                    rt.DrawRectangle(&tt_rect, self.brush_subdued.as_ref().unwrap(), 1.0, None);
-
-                    rt.DrawText(
-                        &text_wide,
-                        self.text_format_label.as_ref().unwrap(),
-                        &D2D_RECT_F {
-                            left: tt_x + 8.0,
-                            top: tt_y + 8.0,
-                            right: tt_x + tt_width - 8.0,
-                            bottom: tt_y + tt_height - 8.0,
-                        },
-                        self.brush_fg.as_ref().unwrap(),
-                        D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        DWRITE_MEASURING_MODE_NATURAL,
-                    );
+            if let Some(m) = state.hover_monitor_idx.and_then(|idx| state.monitors.get(idx)) {
+                let mut tooltip_text = format!("Name: {}\nRange: {} - {}\nPath: {}", m.name, m.hardware_min, m.hardware_max, m.device_path);
+                if let Some(ident) = &m.identity {
+                    tooltip_text.push_str(&format!("\nMFG: {}\nCode: {}\nSerial: {}", ident.manufacturer_id, ident.product_code, ident.serial));
                 }
+                let text_wide: Vec<u16> = tooltip_text.encode_utf16().collect();
+
+                let tt_rect = layout.tooltip;
+                rt.FillRectangle(&tt_rect, self.brush_bg.as_ref().unwrap());
+                rt.DrawRectangle(&tt_rect, self.brush_subdued.as_ref().unwrap(), 1.0, None);
+
+                rt.DrawText(
+                    &text_wide,
+                    self.text_format_label.as_ref().unwrap(),
+                    &D2D_RECT_F {
+                        left: tt_rect.left + 8.0,
+                        top: tt_rect.top + 8.0,
+                        right: tt_rect.right - 8.0,
+                        bottom: tt_rect.bottom - 8.0,
+                    },
+                    self.brush_fg.as_ref().unwrap(),
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
             }
 
-            let _ = rt.EndDraw(None, None);
+            // The device was lost (driver reset, GPU switch, some remote sessions):
+            // rebuild the device resources and paint again.
+            if let Err(err) = rt.EndDraw(None, None)
+                && err.code() == D2DERR_RECREATE_TARGET
+            {
+                self.discard_device_resources();
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
             Ok(())
         }
     }

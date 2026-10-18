@@ -43,10 +43,6 @@ impl HotkeyManager {
         self.registrations.clear();
     }
 
-    pub fn is_registered(&self, action: Action) -> bool {
-        *self.registrations.get(&action).unwrap_or(&false)
-    }
-
     pub fn sync_status(&self, state: &mut crate::state::AppState) {
         state.hotkey_status = self.registrations.clone();
     }
@@ -63,15 +59,25 @@ mod tests {
     }
 
     #[test]
-    fn test_is_registered_fallback() {
-        let hkm = HotkeyManager::new();
-        assert!(!hkm.is_registered(Action::StepUp));
-    }
-}
+    fn test_unregister_all_releases_the_keys() {
+        // Ctrl+Alt+Shift+Win+F24 on the test thread: nothing else holds it.
+        let hotkeys = HashMap::from([(Action::StepUp, Hotkey { vkey: 0x87, modifiers: 0x000F })]);
+        let thread = HWND::default();
 
-impl Drop for HotkeyManager {
-    fn drop(&mut self) {
-        // Warning: Requires HWND to unregister, but Drop doesn't have it.
-        // HWND is managed by the message loop, we should unregister before destruction.
+        let mut first = HotkeyManager::new();
+        first.register_all(thread, &hotkeys);
+        assert_eq!(first.registrations.get(&Action::StepUp), Some(&true));
+
+        let mut second = HotkeyManager::new();
+        second.register_all(thread, &hotkeys);
+        assert_eq!(second.registrations.get(&Action::StepUp), Some(&false), "key is still held");
+
+        first.unregister_all(thread);
+        assert!(first.registrations.is_empty());
+
+        let mut third = HotkeyManager::new();
+        third.register_all(thread, &hotkeys);
+        assert_eq!(third.registrations.get(&Action::StepUp), Some(&true), "key was released");
+        third.unregister_all(thread);
     }
 }

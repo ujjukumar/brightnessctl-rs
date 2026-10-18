@@ -1,16 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use windows::Win32::System::Registry::*;
 use windows::core::w;
 use crate::state::MonitorIdentity;
 use crate::actions::Action;
 
+const CONFIG_FILE_NAME: &str = "brightnessctl.json";
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum ThemeMode {
     Light,
     Dark,
     Auto,
+}
+
+impl ThemeMode {
+    /// Whether to draw dark; `Auto` follows Windows' app mode.
+    pub fn is_dark(self, system_dark: bool) -> bool {
+        match self {
+            ThemeMode::Dark => true,
+            ThemeMode::Light => false,
+            ThemeMode::Auto => system_dark,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -29,16 +44,14 @@ pub struct Hotkey {
     pub modifiers: u32, // MOD_CONTROL | MOD_ALT etc
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Missing fields fall back to `Settings::default()`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
 pub struct Settings {
     pub theme: ThemeMode,
-    #[serde(default)]
     pub monitor_states: HashMap<String, MonitorState>,
-    #[serde(default = "default_presets")]
     pub presets: Vec<f32>,
-    #[serde(default = "default_hotkeys")]
     pub hotkeys: HashMap<Action, Hotkey>,
-    #[serde(default = "default_step_size")]
     pub step_size: f32,
 }
 
@@ -84,14 +97,8 @@ impl Settings {
         self.monitor_states.insert(identity.composite_key(), state);
     }
 
-    pub fn is_dark_mode(&self) -> bool {
-        match self.theme {
-            ThemeMode::Dark => true,
-            ThemeMode::Light => false,
-            ThemeMode::Auto => Self::is_system_dark_mode(),
-        }
-    }
-
+    /// Whether Windows apps are set to dark mode. This reads the registry, so callers
+    /// keep the result and only read it again on `WM_SETTINGCHANGE`.
     pub fn is_system_dark_mode() -> bool {
         unsafe {
             let mut hkey = HKEY::default();
@@ -122,27 +129,198 @@ impl Settings {
         true // Default to dark if detection fails
     }
 
-    pub fn load() -> Self {
-        if let Ok(content) = fs::read_to_string("brightnessctl.json") {
-            if let Ok(settings) = serde_json::from_str(&content) {
-                return settings;
-            }
-        }
-        let default = Self::default();
-        let _ = default.save(); // Try to save default
-        default
+    /// `brightnessctl.json` next to the executable, so the config travels with a
+    /// portable install no matter which directory the app is started from.
+    pub fn default_path() -> PathBuf {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(CONFIG_FILE_NAME)))
+            .unwrap_or_else(|| PathBuf::from(CONFIG_FILE_NAME))
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
-        let content = serde_json::to_string_pretty(self)?;
-        fs::write("brightnessctl.json", content)
+    /// Loads the config next to the executable. See `load_from`.
+    pub fn load() -> (Self, Option<String>) {
+        Self::load_from(&Self::default_path())
     }
+
+    /// Loads settings from `path`, returning a status warning if the file had to be replaced.
+    ///
+    /// A missing file is created with defaults. A file that fails to parse is renamed to
+    /// `<name>.bak` (replacing an older backup) and defaults are used; the user's file is
+    /// never overwritten in place.
+    pub fn load_from(path: &Path) -> (Self, Option<String>) {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let settings = Self::default();
+                let _ = settings.save_to(path);
+                return (settings, None);
+            }
+            Err(err) => return (Self::default(), Some(format!("Config unreadable ({err}); using defaults"))),
+        };
+
+        match serde_json::from_slice::<Settings>(&bytes) {
+            Ok(mut settings) => {
+                settings.sanitize();
+                (settings, None)
+            }
+            Err(err) => {
+                let location = format!("line {}, column {}", err.line(), err.column());
+                let settings = Self::default();
+                let warning = if fs::rename(path, backup_path(path)).is_ok() {
+                    let _ = settings.save_to(path);
+                    format!("Config error at {location}. Saved as .bak; using defaults")
+                } else {
+                    format!("Config error at {location}; using defaults")
+                };
+                (settings, Some(warning))
+            }
+        }
+    }
+
+    /// Saves to the config next to the executable.
+    pub fn save(&self) -> io::Result<()> {
+        self.save_to(&Self::default_path())
+    }
+
+    /// Writes a temporary file and renames it over `path`, so a crash mid-write
+    /// can't leave a truncated config behind.
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        let content = serde_json::to_string_pretty(self)?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, path)
+    }
+
+    /// Clamps values a hand-edited config could get wrong.
+    fn sanitize(&mut self) {
+        self.presets.retain(|p| p.is_finite());
+        for preset in &mut self.presets {
+            *preset = preset.clamp(0.0, 1.0);
+        }
+        if !(self.step_size.is_finite() && self.step_size > 0.0 && self.step_size <= 1.0) {
+            self.step_size = default_step_size();
+        }
+    }
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    path.with_extension("json.bak")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::MonitorIdentity;
+
+    /// A fresh, empty directory for one test.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("brightnessctl-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_default_path_is_next_to_exe() {
+        let path = Settings::default_path();
+        assert_eq!(path.file_name().unwrap(), CONFIG_FILE_NAME);
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(path.parent(), exe.parent());
+    }
+
+    #[test]
+    fn test_missing_file_is_created_with_defaults() {
+        let path = test_dir("missing").join(CONFIG_FILE_NAME);
+        let (settings, warning) = Settings::load_from(&path);
+        assert_eq!(settings, Settings::default());
+        assert!(warning.is_none());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_missing_fields_use_defaults() {
+        let path = test_dir("partial").join(CONFIG_FILE_NAME);
+
+        fs::write(&path, r#"{ "step_size": 0.2 }"#).unwrap();
+        let (settings, warning) = Settings::load_from(&path);
+        assert!(warning.is_none());
+        assert_eq!(settings.theme, ThemeMode::Auto);
+        assert_eq!(settings.step_size, 0.2);
+        assert_eq!(settings.presets, default_presets());
+        assert_eq!(settings.hotkeys, default_hotkeys());
+
+        fs::write(&path, "{}").unwrap();
+        assert_eq!(Settings::load_from(&path).0, Settings::default());
+    }
+
+    #[test]
+    fn test_invalid_json_is_backed_up_not_overwritten() {
+        let dir = test_dir("invalid");
+        let path = dir.join(CONFIG_FILE_NAME);
+        let broken = "{\n  \"theme\": \"Dark\",\n  oops\n}";
+        fs::write(&path, broken).unwrap();
+        fs::write(backup_path(&path), "older backup").unwrap();
+
+        let (settings, warning) = Settings::load_from(&path);
+        assert_eq!(settings, Settings::default());
+        let warning = warning.unwrap();
+        assert!(warning.contains("line 3"), "{warning}");
+        assert!(warning.contains(".bak"), "{warning}");
+
+        // The user's text is kept in the backup; the config itself is valid again.
+        assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), broken);
+        let (reloaded, warning) = Settings::load_from(&path);
+        assert!(warning.is_none());
+        assert_eq!(reloaded, Settings::default());
+    }
+
+    #[test]
+    fn test_out_of_range_values_are_sanitized() {
+        let path = test_dir("sanitize").join(CONFIG_FILE_NAME);
+        fs::write(&path, r#"{ "presets": [-0.5, 0.3, 2.0], "step_size": 5.0 }"#).unwrap();
+        let (settings, _) = Settings::load_from(&path);
+        assert_eq!(settings.presets, vec![0.0, 0.3, 1.0]);
+        assert_eq!(settings.step_size, default_step_size());
+
+        for bad_step in ["0", "-0.1"] {
+            fs::write(&path, format!(r#"{{ "step_size": {bad_step} }}"#)).unwrap();
+            assert_eq!(Settings::load_from(&path).0.step_size, default_step_size());
+        }
+    }
+
+    #[test]
+    fn test_save_then_load_round_trip() {
+        let path = test_dir("roundtrip").join(CONFIG_FILE_NAME);
+        let mut settings = Settings {
+            theme: ThemeMode::Light,
+            step_size: 0.05,
+            ..Default::default()
+        };
+        let identity = MonitorIdentity {
+            manufacturer_id: "GBT".into(),
+            product_code: 9218,
+            serial: "22350B003157".into(),
+            is_fallback: false,
+        };
+        settings.set_monitor_state(
+            &identity,
+            MonitorState {
+                brightness_value: 42,
+                normalized_value: 0.42,
+                last_set_by_app: true,
+                write_confirmed: true,
+                timestamp: 1,
+                last_seen_device_path: r"DISPLAY\GBT2402\5&145fde2&5&UID24837".into(),
+            },
+        );
+
+        settings.save_to(&path).unwrap();
+        assert!(!path.with_extension("json.tmp").exists());
+        let (loaded, warning) = Settings::load_from(&path);
+        assert!(warning.is_none());
+        assert_eq!(loaded, settings);
+    }
 
     #[test]
     fn test_monitor_state_persistence() {
@@ -185,8 +363,10 @@ mod tests {
 
     #[test]
     fn test_settings_serialization() {
-        let mut settings = Settings::default();
-        settings.theme = ThemeMode::Dark;
+        let settings = Settings {
+            theme: ThemeMode::Dark,
+            ..Default::default()
+        };
         let serialized = serde_json::to_string(&settings).unwrap();
         let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(settings.theme, deserialized.theme);
@@ -202,28 +382,23 @@ mod tests {
         assert!(settings.hotkeys.contains_key(&Action::StepUp));
     }
 
-        #[test]
-
-        fn test_custom_hotkey_serialization() {
-
-            let mut settings = Settings::default();
-
-            let custom_hotkey = Hotkey { vkey: 0x41, modifiers: 0x0001 }; // Alt + A
-
-            settings.hotkeys.insert(Action::StepUp, custom_hotkey.clone());
-
-            
-
-            let serialized = serde_json::to_string(&settings).unwrap();
-
-            let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
-
-            
-
-            assert_eq!(deserialized.hotkeys.get(&Action::StepUp).unwrap(), &custom_hotkey);
-
-        }
-
+    #[test]
+    fn test_theme_auto_follows_system() {
+        assert!(!ThemeMode::Light.is_dark(true));
+        assert!(ThemeMode::Dark.is_dark(false));
+        assert!(ThemeMode::Auto.is_dark(true));
+        assert!(!ThemeMode::Auto.is_dark(false));
     }
 
-    
+    #[test]
+    fn test_custom_hotkey_serialization() {
+        let mut settings = Settings::default();
+        let custom_hotkey = Hotkey { vkey: 0x41, modifiers: 0x0001 }; // Alt + A
+        settings.hotkeys.insert(Action::StepUp, custom_hotkey.clone());
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.hotkeys.get(&Action::StepUp).unwrap(), &custom_hotkey);
+    }
+}

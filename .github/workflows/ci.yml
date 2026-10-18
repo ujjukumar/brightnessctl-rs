@@ -19,12 +19,17 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
       - name: Cargo check
         run: cargo check --locked
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Cargo test
         run: cargo test --locked
