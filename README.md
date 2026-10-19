@@ -24,10 +24,10 @@
  ## ✨ Key Features
 
  *   **Zero Bloat:** Built with raw Win32 APIs, Direct2D, and DirectWrite. No Electron, no Qt, no WebViews, no .NET runtime.
- *   **Ultralight:** Release binary is **< 1 MB** (about 297 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
+ *   **Ultralight:** Release binary is **< 1 MB** (about 311 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
  *   **Instant Startup:** The window opens immediately. Monitors are detected in the background, so a slow monitor never holds up the UI.
  *   **Zero Idle CPU:** Nothing runs while you aren't using it: no polling, no periodic timers.
- *   **Native Windows Look & Feel:** Segoe UI, a native title bar, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling. The File, View, Theme and Help menus open from a small button at the right of the header, so the window keeps a plain client area.
+ *   **Native Windows Look & Feel:** Segoe UI, a native title bar, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling. A small button at the right of the header opens one short menu — the themes, the background picture, sync mode and exit — which the app draws itself, so it matches the theme instead of looking like a system menu.
  *   **Glass Theme:** An extra theme with a soft cream-to-peach gradient, rounded translucent panels, and rounded window corners on Windows 11. With a background picture the panels blur it, so they look like frosted glass. The title bar is tinted to match the top of the gradient, so the frame and the window look like one surface.
  *   **Personal Touch:** Optional background picture behind the sliders, dimmed so the text stays readable, plus small built-in icons (monitor or laptop per display). The picture is shrunk to the window size, so even a large photo uses little memory.
  *   **Universal Display Support:**
@@ -67,16 +67,15 @@
 
  ## 🎮 Usage
 
- 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward. The **menu button** at the right of the header opens the **File**, **View**, **Theme** and **Help** menus.
+ 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward. The **menu button** at the right of the header opens a short menu: the four themes, the background picture, sync mode and exit. `Esc` or a click anywhere else closes it.
  2.  Adjust brightness:
      *   **Drag** or click a slider.
      *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
      *   **Click the percentage** to type a value. `Enter` or clicking elsewhere applies it; `Esc` cancels.
- 3.  **View → Sync All Monitors (Lock)** moves every monitor by the same amount.
- 4.  **View → Refresh Monitors** finds the displays again. This also happens automatically when a display is connected or disconnected.
- 5.  **View → Background Image...** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **View → Remove Background** goes back to the plain theme color.
- 6.  **Theme → Glass** switches to the creamy gradient look with translucent panels (frosted over your picture, if you set one). **Auto**, **Light** and **Dark** keep the plain Windows look.
- 7.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
+ 3.  **Sync All Monitors (Lock)** moves every monitor by the same amount.
+ 4.  **Background Image...** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **Remove Background**, which appears only while a picture is set, goes back to the plain theme color. Displays are found again automatically when one is connected or disconnected.
+ 5.  **Glass** switches to the creamy gradient look with translucent panels (frosted over your picture, if you set one). **Auto**, **Light** and **Dark** keep the plain Windows look.
+ 6.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
 
  ---
 
@@ -84,14 +83,14 @@
 
  Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, which is created with defaults on first run. A `brightnessctl.json` that an older version left next to `brightnessctl.exe` is moved there automatically. Edit the file while the app is closed, since the app rewrites it when it saves. You can customize:
 
- *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also available from **Theme** in the header menu.
+ *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also available from the header menu.
  *   **Hotkeys:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for:
      *   `StepUp` (Increase brightness)
      *   `StepDown` (Decrease brightness)
      *   `CyclePresets` (Switch between configured levels)
  *   **Presets:** Brightness levels from 0 to 1, cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`).
  *   **Step Size:** The hotkey step (default `0.1` / 10%).
- *   **Background:** `background_image` is the picture's full path (`null` for none; also set from **View** in the header menu). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
+ *   **Background:** `background_image` is the picture's full path (`null` for none; also set from the header menu). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
 
  `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. The file may be saved with or without a UTF-8 byte order mark. If it can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
 
