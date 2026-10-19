@@ -1,122 +1,43 @@
 # brightnessctl
 
- [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-DEA584.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
- [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
- [![Binary Size](https://img.shields.io/badge/Binary%20Size-%3C%201%20MB-brightgreen.svg)]()
- [![GitHub Release](https://img.shields.io/github/v/release/ujjukumar/brightnessctl-rs?logo=github)](https://github.com/ujjukumar/brightnessctl-rs/releases)
- [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+A tiny native Windows utility for controlling display brightness — one slider per monitor, for internal panels and DDC/CI desktop displays alike. A single ~290 KB `.exe`, no installer, no runtime.
 
- **brightnessctl** is an ultra-lightweight, native Windows 11 utility for controlling display brightness. Designed for power users and minimalists who demand efficiency, it provides precise control over
-  both internal laptop screens and external DDC/CI desktop monitors without the overhead of heavy UI frameworks or runtimes.
+## Download
 
- ---
+Grab `brightnessctl.exe` from the [latest release](https://github.com/ujjukumar/brightnessctl-rs/releases/latest) and run it. Every release ships that one file.
 
- ## 📥 Download
+## Usage
 
- Pre-built, optimized binaries are available on the [Releases](https://github.com/ujjukumar/brightnessctl-rs/releases) page:
+1.  Run `brightnessctl.exe`. Each detected display gets a slider; a slow monitor shows `Detecting…` while it is probed. Only one copy runs at a time — launching it again brings the open window forward.
+2.  Adjust brightness:
+    *   **Drag** or click a slider.
+    *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
+    *   **Click the percentage** to type a value. `Enter` or clicking elsewhere applies it; `Esc` cancels.
+3.  The controls under the sliders:
+    *   **Auto**, **Light**, **Dark**, **Glass** pick the theme.
+    *   **Sync** moves every display together; the status bar shows `SYNC ACTIVE` while it is on.
+    *   **Picture…** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **Remove**, which appears only while a picture is set, clears it again.
+4.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the display under the mouse cursor, or on every display in sync mode.
 
- 1. Head to [Latest Release](https://github.com/ujjukumar/brightnessctl-rs/releases/latest).
- 2. Download the standalone `brightnessctl.exe`, or the `brightnessctl-vX.Y.Z-windows-x86_64.zip` bundle (EXE, README and license). `checksums.txt` has the SHA-256 of both.
- 3. Run `brightnessctl.exe`. No installation required!
+## Build
 
- ---
+```bash
+cargo build --release
+```
 
- ## ✨ Key Features
+The executable lands in `target\release\brightnessctl.exe`. Rust stable with the MSVC toolchain, Windows 10 or 11.
 
- *   **Zero Bloat:** Built with raw Win32 APIs, Direct2D, and DirectWrite. No Electron, no Qt, no WebViews, no .NET runtime.
- *   **Ultralight:** Release binary is **< 1 MB** (about 290 KB) thanks to aggressive link-time optimization (`lto = "fat"`, `opt-level = "z"`, stripped symbols).
- *   **Instant Startup:** The window opens immediately. Monitors are detected in the background, so a slow monitor never holds up the UI.
- *   **Zero Idle CPU:** Nothing runs while you aren't using it: no polling, no periodic timers.
- *   **Native Windows Look & Feel:** Segoe UI, a native title bar, light/dark mode that follows Windows (title bar included), and sharp text at any display scaling. The themes, sync mode and the background picture are plain buttons on the page itself, in the space under the sliders — no menu bar and nothing hidden behind a pop-up.
- *   **Glass Theme:** An extra theme with a soft cream-to-peach gradient, rounded translucent panels, and rounded window corners on Windows 11. With a background picture the panels blur it, so they look like frosted glass. The title bar is tinted to match the top of the gradient, so the frame and the window look like one surface.
- *   **Personal Touch:** Optional background picture behind the sliders, dimmed so the text stays readable, plus small built-in icons (monitor or laptop per display). The picture is shrunk to the window size, so even a large photo uses little memory.
- *   **Universal Display Support:**
-     *   **Internal Displays:** Built-in laptop panels are controlled through WMI (`WmiMonitorBrightness`).
-     *   **External Displays:** DDC/CI monitors are controlled through the Windows monitor API, falling back to raw VCP code `0x10`.
- *   **Remembers Brightness:** Each monitor is recognized by its EDID, and the brightness the app last set is restored at startup.
- *   **Global Hotkeys:** Configurable system-wide shortcuts for background brightness adjustments.
+## Configuration
 
- ---
+Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, created with defaults on first run. Edit it while the app is closed, since the app rewrites it when it saves.
 
- ## 🛠️ Build Instructions
+*   **`theme`:** `"Auto"` (follows Windows), `"Light"`, `"Dark"` or `"Glass"`.
+*   **`background_image`:** the picture's full path, or `null`. **`background_dim`** fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
+*   **`hotkeys`:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for `StepUp`, `StepDown` and `CyclePresets`.
+*   **`presets`:** brightness levels cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`). **`step_size`** is the hotkey step (default `0.1`).
 
- ### Prerequisites
- *   Windows 10 or 11 (x64)
- *   [Rust](https://www.rust-lang.org/tools/install) (Stable MSVC toolchain)
+`monitor_states` is written by the app to remember each display's brightness. A file that can't be parsed is renamed to `brightnessctl.json.bak`, defaults are used, and the status bar shows where the error is.
 
- ### Steps
+## License
 
- 1.  **Clone the repository:**
-     ```bash
-     git clone https://github.com/ujjukumar/brightnessctl-rs.git
-     cd brightnessctl-rs
-     ```
-
- 2.  **Build for release:**
-     ```bash
-     cargo build --release
-     ```
-
- 3.  **Run:**
-     The standalone executable will be located at:
-     ```bash
-     .\target\release\brightnessctl.exe
-     ```
-
- ---
-
- ## 🎮 Usage
-
- 1.  Launch `brightnessctl.exe`. Each detected display gets a slider, which shows `Detecting…` for a moment while the monitor is probed. Only one copy runs at a time: launching it again brings the open window forward. The controls sit under the sliders: the four **theme** buttons, the **Sync** toggle and **Picture…**.
- 2.  Adjust brightness:
-     *   **Drag** or click a slider.
-     *   **Scroll** over a slider: 5% per notch, or 1% while holding `Shift`.
-     *   **Click the percentage** to type a value. `Enter` or clicking elsewhere applies it; `Esc` cancels.
- 3.  **Sync** moves every monitor by the same amount; the status bar shows `SYNC ACTIVE` while it is on.
- 4.  **Picture…** shows a picture (PNG, JPG, BMP or GIF) behind the sliders; **Remove**, which appears only while a picture is set, goes back to the plain theme color. Displays are found again automatically when one is connected or disconnected.
- 5.  **Glass**, the last theme button, switches to the creamy gradient look with translucent panels (frosted over your picture, if you set one). **Auto**, **Light** and **Dark** keep the plain Windows look.
- 6.  Global hotkeys work without focusing the window: `Ctrl+Alt+Up` / `Ctrl+Alt+Down` step the brightness and `Ctrl+Alt+P` cycles presets. They act on the monitor under the mouse cursor, or on every monitor in sync mode.
-
- ---
-
- ## ⚙️ Configuration
-
- Settings live in `%APPDATA%\brightnessctl\brightnessctl.json`, which is created with defaults on first run. A `brightnessctl.json` that an older version left next to `brightnessctl.exe` is moved there automatically. Edit the file while the app is closed, since the app rewrites it when it saves. You can customize:
-
- *   **Theme:** `"Auto"` (follows Windows), `"Light"`, `"Dark"`, or `"Glass"` (cream gradient with translucent panels). Also switchable from the theme buttons under the sliders.
- *   **Hotkeys:** a virtual key code (`vkey`) and `modifiers` (`Alt = 1`, `Ctrl = 2`, `Shift = 4`, `Win = 8`, added together) for:
-     *   `StepUp` (Increase brightness)
-     *   `StepDown` (Decrease brightness)
-     *   `CyclePresets` (Switch between configured levels)
- *   **Presets:** Brightness levels from 0 to 1, cycled in order (default `[0.0, 0.25, 0.5, 0.75, 1.0]`).
- *   **Step Size:** The hotkey step (default `0.1` / 10%).
- *   **Background:** `background_image` is the picture's full path (`null` for none; also set from the Picture… button). `background_dim` fades it from `0.0` (full strength) to `1.0` (hidden), default `0.6`.
-
- `monitor_states` is written by the app to remember each monitor's brightness. Missing fields fall back to their defaults and out-of-range values are corrected. The file may be saved with or without a UTF-8 byte order mark. If it can't be parsed, it is renamed to `brightnessctl.json.bak` in the same folder, defaults are used, and the status bar shows the line and column of the error.
-
- ---
-
- ## 🏗️ Architecture
-
- This project strictly adheres to a "no-framework" philosophy to maximize performance and minimize resource usage:
-
- *   **Language:** Rust 2024 Edition
- *   **Windowing & Event Loop:** Native Win32 API (`CreateWindowExW`, `GetMessageW`)
- *   **Hardware Acceleration:** Direct2D (geometry & shapes, gradients, rounded translucent panels) + DirectWrite (typography), Per-Monitor DPI aware
- *   **Pictures:** Windows Imaging Component (WIC), built into Windows, decodes the background on its own thread and blurs a window-sized copy for the frosted panels
- *   **Monitor Protocol:** `Dxva2` High-Level Monitor Configuration API and VCP `0x10` (DDC/CI); WMI for built-in panels
- *   **Monitor I/O:** One worker thread per monitor, so slow DDC/CI never blocks the window; rapid changes are coalesced to the latest value
- *   **State Management:** Event-driven, no polling; only one-shot timers (delayed save, display-change refresh, background re-decode after a resize)
-
- ---
-
- ## 🚀 Contributing & Releases
-
- *   Changes reach `main` only through pull requests. CI must pass first: `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, and a release build that has to stay under 1 MB.
- *   Every merged pull request publishes a new [release](https://github.com/ujjukumar/brightnessctl-rs/releases) automatically. The patch number goes up by default; add the `minor` or `major` label to the pull request to bump that part instead.
-
- ---
-
- ## 📝 License
-
- This project is licensed under the MIT License — see the LICENSE file for details.
+MIT — see [LICENSE](LICENSE).

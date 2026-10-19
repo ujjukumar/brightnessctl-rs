@@ -318,6 +318,13 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 let _ = EndPaint(window, &ps);
                 LRESULT(0)
             }
+            WM_GETMINMAXINFO => {
+                // Keep the window from being dragged smaller than the layout can hold.
+                let info = &mut *(lparam.0 as *mut MINMAXINFO);
+                let (width, height) = window::min_window_size(GetDpiForWindow(window));
+                info.ptMinTrackSize = POINT { x: width, y: height };
+                LRESULT(0)
+            }
             WM_SIZE => {
                 // lParam holds the new client width and height in pixels.
                 if let Some(mut app) = borrow_app(window) {

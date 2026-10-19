@@ -35,11 +35,13 @@ const OPTION_GAP: f32 = 8.0;
 const OPTION_LABEL_WIDTH: f32 = 52.0;
 /// Space between the last slider and the first option line.
 const OPTION_TOP_GAP: f32 = 16.0;
-const OPTION_SYNC_WIDTH: f32 = 80.0;
-const OPTION_PICTURE_WIDTH: f32 = 100.0;
-const OPTION_REMOVE_WIDTH: f32 = 80.0;
-/// Corner radius of an option button; the renderer uses it too.
-pub const OPTION_RADIUS: f32 = 8.0;
+const OPTION_SYNC_WIDTH: f32 = 88.0;
+const OPTION_PICTURE_WIDTH: f32 = 96.0;
+const OPTION_REMOVE_WIDTH: f32 = 76.0;
+/// Corner radius of an option control: half its height, so it is a pill.
+pub const OPTION_RADIUS: f32 = OPTION_HEIGHT / 2.0;
+/// How far the lit theme button sits inside the panel that holds the four of them.
+pub const SEGMENT_INSET: f32 = 3.0;
 
 /// One monitor's row: card, icon, name label, percentage value, slider track and its
 /// click area.
@@ -72,6 +74,8 @@ pub struct Layout {
 pub struct Options {
     /// The "Theme" and "Display" labels, one per line.
     pub labels: [Rect; 2],
+    /// The panel that holds the four theme buttons, side by side.
+    pub theme_panel: Rect,
     /// One button per theme, in `ThemeMode` order: Auto, Light, Dark, Glass.
     pub themes: Vec<Rect>,
     /// Turns sync mode on and off.
@@ -196,11 +200,12 @@ fn options(content_right: f32, status_top: f32, has_picture: bool) -> Options {
         rect(MARGIN, text_top, line_left - OPTION_GAP, text_top + LABEL_HEIGHT)
     };
 
-    // Four theme buttons share the first line.
-    let theme_width = ((line_width - 3.0 * OPTION_GAP) / 4.0).max(1.0);
+    // The four theme buttons share one panel, segment by segment with no gaps.
+    let theme_panel = rect(line_left, first_top, content_right, first_top + OPTION_HEIGHT);
+    let theme_width = (line_width / 4.0).max(1.0);
     let themes = (0..4)
         .map(|i| {
-            let left = line_left + i as f32 * (theme_width + OPTION_GAP);
+            let left = line_left + i as f32 * theme_width;
             rect(left, first_top, (left + theme_width).min(content_right), first_top + OPTION_HEIGHT)
         })
         .collect();
@@ -216,7 +221,14 @@ fn options(content_right: f32, status_top: f32, has_picture: bool) -> Options {
     let picture = next(OPTION_PICTURE_WIDTH, second_top);
     let remove = has_picture.then(|| next(OPTION_REMOVE_WIDTH, second_top));
 
-    Options { labels: [label(first_top), label(second_top)], themes, sync, picture, remove }
+    Options {
+        labels: [label(first_top), label(second_top)],
+        theme_panel,
+        themes,
+        sync,
+        picture,
+        remove,
+    }
 }
 
 impl Layout {
@@ -283,6 +295,14 @@ mod tests {
         assert_eq!(options.themes.len(), 4);
         assert_eq!(options.themes[0].left, options.labels[0].right + OPTION_GAP);
         assert_eq!(options.themes[3].right, 384.0 - MARGIN);
+        // One panel spans the four theme buttons, which sit side by side inside it.
+        assert_eq!(options.theme_panel.left, options.themes[0].left);
+        assert_eq!(options.theme_panel.right, options.themes[3].right);
+        assert_eq!(
+            options.theme_panel.right - options.theme_panel.left,
+            options.themes.iter().map(|t| t.right - t.left).sum::<f32>()
+        );
+        assert_eq!(options.theme_panel.bottom - options.theme_panel.top, OPTION_HEIGHT);
         let remove = options.remove.expect("a picture is set");
         assert_eq!(remove.right, 384.0 - MARGIN);
 
@@ -291,7 +311,7 @@ mod tests {
         assert!(options.themes[0].bottom < options.sync.top);
         assert!(options.sync.bottom < layout.status_bar.top);
         for pair in options.themes.windows(2) {
-            assert!(pair[0].right < pair[1].left);
+            assert_eq!(pair[0].right, pair[1].left);
         }
         assert!(options.sync.right < options.picture.left);
         assert!(options.picture.right < remove.left);
