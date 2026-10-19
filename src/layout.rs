@@ -6,15 +6,11 @@
 
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F as Rect;
 
-use crate::menu;
-
 pub const MARGIN: f32 = 24.0;
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 
 const TITLE_HEIGHT: f32 = 32.0;
 const TITLE_ICON_SIZE: f32 = 24.0;
-/// The header button that opens the menu; the window has no menu bar.
-const MENU_BUTTON_SIZE: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 48.0;
 const ROW_PITCH: f32 = 72.0;
 const LABEL_HEIGHT: f32 = 16.0;
@@ -31,15 +27,19 @@ const TRACK_HIT_PADDING: f32 = 12.0;
 const TOOLTIP_WIDTH: f32 = 300.0;
 const TOOLTIP_HEIGHT: f32 = 100.0;
 const TOOLTIP_GAP: f32 = 8.0;
-const MENU_WIDTH: f32 = 208.0;
-const MENU_ROW_HEIGHT: f32 = 30.0;
-const MENU_SEPARATOR_HEIGHT: f32 = 9.0;
-/// Padding inside the menu panel, above the first row and below the last.
-const MENU_PAD: f32 = 6.0;
-/// Space between the header button and the panel hanging under it.
-const MENU_GAP: f32 = 4.0;
-/// Left and right padding of the text in a menu row; the renderer uses it too.
-pub const MENU_INSET: f32 = 16.0;
+/// How tall the two option lines under the sliders are.
+const OPTION_HEIGHT: f32 = 28.0;
+/// Gap between two controls on a line, and between the two lines.
+const OPTION_GAP: f32 = 8.0;
+/// Width of the "Theme" and "Display" labels at the left of each line.
+const OPTION_LABEL_WIDTH: f32 = 52.0;
+/// Space between the last slider and the first option line.
+const OPTION_TOP_GAP: f32 = 16.0;
+const OPTION_SYNC_WIDTH: f32 = 80.0;
+const OPTION_PICTURE_WIDTH: f32 = 100.0;
+const OPTION_REMOVE_WIDTH: f32 = 80.0;
+/// Corner radius of an option button; the renderer uses it too.
+pub const OPTION_RADIUS: f32 = 8.0;
 
 /// One monitor's row: card, icon, name label, percentage value, slider track and its
 /// click area.
@@ -57,8 +57,8 @@ pub struct Row {
 pub struct Layout {
     pub title_icon: Rect,
     pub title: Rect,
-    /// The menu button at the right end of the header.
-    pub menu_button: Rect,
+    /// The theme buttons, the sync toggle and the picture controls.
+    pub options: Options,
     pub rows: Vec<Row>,
     /// Card behind the status bar, drawn by themes that have one.
     pub status_card: Rect,
@@ -66,10 +66,53 @@ pub struct Layout {
     pub tooltip: Rect,
 }
 
+/// The two lines of controls under the sliders: the themes on the first, sync and the
+/// picture on the second.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Options {
+    /// The "Theme" and "Display" labels, one per line.
+    pub labels: [Rect; 2],
+    /// One button per theme, in `ThemeMode` order: Auto, Light, Dark, Glass.
+    pub themes: Vec<Rect>,
+    /// Turns sync mode on and off.
+    pub sync: Rect,
+    /// Opens the picture picker.
+    pub picture: Rect,
+    /// Clears the picture; only there while one is set.
+    pub remove: Option<Rect>,
+}
+
+impl Options {
+    /// What the controls have under the point, if anything.
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
+        for (i, theme) in self.themes.iter().enumerate() {
+            if contains(theme, x, y) {
+                return Some(Hit::Theme(i));
+            }
+        }
+        if contains(&self.sync, x, y) {
+            return Some(Hit::Sync);
+        }
+        if contains(&self.picture, x, y) {
+            return Some(Hit::Picture);
+        }
+        if self.remove.as_ref().is_some_and(|area| contains(area, x, y)) {
+            return Some(Hit::RemovePicture);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
-    /// The menu button in the header.
-    Menu,
+    /// A theme button, in `ThemeMode` order: Auto, Light, Dark, Glass.
+    Theme(usize),
+    /// The sync toggle.
+    Sync,
+    /// The picture picker.
+    Picture,
+    /// Clears the background picture.
+    RemovePicture,
     /// The percentage label of row `n`.
     Value(usize),
     /// The slider of row `n`.
@@ -77,34 +120,21 @@ pub enum Hit {
 }
 
 impl Hit {
-    /// The row that was hit, or `None` for the menu button.
+    /// The monitor row that was hit, or `None` for one of the window's own controls.
     pub fn index(self) -> Option<usize> {
         match self {
-            Hit::Menu => None,
             Hit::Value(i) | Hit::Track(i) => Some(i),
+            _ => None,
         }
     }
 }
 
 /// Lays out a client area of `width` x `height` DIPs holding `row_count` monitors.
-pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
+pub fn compute(width: f32, height: f32, row_count: usize, has_picture: bool) -> Layout {
     let content_right = MARGIN + (width - 2.0 * MARGIN).max(1.0);
     let icon_top = MARGIN + (TITLE_HEIGHT - TITLE_ICON_SIZE) / 2.0;
     let title_icon = rect(MARGIN, icon_top, MARGIN + TITLE_ICON_SIZE, icon_top + TITLE_ICON_SIZE);
-    let title_left = title_icon.right + ICON_GAP;
-    let button_top = MARGIN + (TITLE_HEIGHT - MENU_BUTTON_SIZE) / 2.0;
-    let menu_button = rect(
-        content_right - MENU_BUTTON_SIZE,
-        button_top,
-        content_right,
-        button_top + MENU_BUTTON_SIZE,
-    );
-    let title = rect(
-        title_left,
-        MARGIN,
-        (menu_button.left - ICON_GAP).max(title_left),
-        MARGIN + TITLE_HEIGHT,
-    );
+    let title = rect(title_icon.right + ICON_GAP, MARGIN, content_right, MARGIN + TITLE_HEIGHT);
 
     let first_row_top = MARGIN + HEADER_HEIGHT;
     let rows = (0..row_count)
@@ -134,6 +164,8 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
         .collect();
 
     let status_bar = rect(0.0, height - STATUS_BAR_HEIGHT, width, height);
+    // The options sit in the space under the sliders, just above the status bar.
+    let options = options(content_right, status_bar.top, has_picture);
     let status_card = rect(
         MARGIN - CARD_PAD,
         status_bar.top + 2.0,
@@ -148,14 +180,51 @@ pub fn compute(width: f32, height: f32, row_count: usize) -> Layout {
         tooltip_bottom,
     );
 
-    Layout { title_icon, title, menu_button, rows, status_card, status_bar, tooltip }
+    Layout { title_icon, title, options, rows, status_card, status_bar, tooltip }
+}
+
+/// Places the two option lines so they end just above `status_top`.
+fn options(content_right: f32, status_top: f32, has_picture: bool) -> Options {
+    let first_top = status_top - OPTION_TOP_GAP - OPTION_HEIGHT * 2.0 - OPTION_GAP;
+    let second_top = first_top + OPTION_HEIGHT + OPTION_GAP;
+    let line_left = (MARGIN + OPTION_LABEL_WIDTH + OPTION_GAP).min(content_right);
+    let line_width = (content_right - line_left).max(1.0);
+
+    // A label per line, centred against the buttons next to it.
+    let label = |top: f32| {
+        let text_top = top + (OPTION_HEIGHT - LABEL_HEIGHT) / 2.0;
+        rect(MARGIN, text_top, line_left - OPTION_GAP, text_top + LABEL_HEIGHT)
+    };
+
+    // Four theme buttons share the first line.
+    let theme_width = ((line_width - 3.0 * OPTION_GAP) / 4.0).max(1.0);
+    let themes = (0..4)
+        .map(|i| {
+            let left = line_left + i as f32 * (theme_width + OPTION_GAP);
+            rect(left, first_top, (left + theme_width).min(content_right), first_top + OPTION_HEIGHT)
+        })
+        .collect();
+
+    // Sync and the picture controls fill the second line from the left.
+    let mut left = line_left;
+    let mut next = move |width: f32, top: f32| {
+        let area = rect(left, top, (left + width).min(content_right), top + OPTION_HEIGHT);
+        left += width + OPTION_GAP;
+        area
+    };
+    let sync = next(OPTION_SYNC_WIDTH, second_top);
+    let picture = next(OPTION_PICTURE_WIDTH, second_top);
+    let remove = has_picture.then(|| next(OPTION_REMOVE_WIDTH, second_top));
+
+    Options { labels: [label(first_top), label(second_top)], themes, sync, picture, remove }
 }
 
 impl Layout {
     /// Returns what lies under the point (`x`, `y`), in DIPs.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
-        if contains(&self.menu_button, x, y) {
-            return Some(Hit::Menu);
+        // The option controls are drawn over the sliders, so they take the pointer first.
+        if let Some(hit) = self.options.hit_test(x, y) {
+            return Some(hit);
         }
         for (i, row) in self.rows.iter().enumerate() {
             if contains(&row.value, x, y) {
@@ -167,55 +236,6 @@ impl Layout {
         }
         None
     }
-}
-
-/// One placed row of the open menu.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MenuRow {
-    pub row: menu::Row,
-    pub rect: Rect,
-}
-
-/// The open menu: its panel and its rows, top to bottom.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Menu {
-    pub panel: Rect,
-    pub rows: Vec<MenuRow>,
-}
-
-impl Menu {
-    /// The command under the point, along with the row it is in so it can be highlighted.
-    pub fn hit(&self, x: f32, y: f32) -> Option<(usize, u16)> {
-        self.rows.iter().enumerate().find_map(|(i, entry)| match entry.row {
-            menu::Row::Command { id, .. } if contains(&entry.rect, x, y) => Some((i, id)),
-            _ => None,
-        })
-    }
-}
-
-/// Hangs the menu under the header button inside a client area of `width` x `height`.
-pub fn menu(anchor: &Rect, width: f32, height: f32, rows: &[menu::Row]) -> Menu {
-    let height_of = |row: &menu::Row| match row {
-        menu::Row::Separator => MENU_SEPARATOR_HEIGHT,
-        menu::Row::Command { .. } => MENU_ROW_HEIGHT,
-    };
-    let panel_height = rows.iter().map(height_of).sum::<f32>() + MENU_PAD * 2.0;
-    // Right-aligned with the button, and kept inside the window on both axes.
-    let left = (anchor.right - MENU_WIDTH).clamp(MARGIN, (width - MARGIN - MENU_WIDTH).max(MARGIN));
-    let top = (anchor.bottom + MENU_GAP).min((height - MARGIN - panel_height).max(MARGIN));
-    let panel = rect(left, top, left + MENU_WIDTH, top + panel_height);
-
-    let mut y = panel.top + MENU_PAD;
-    let rows = rows
-        .iter()
-        .map(|row| {
-            let row_height = height_of(row);
-            let entry = MenuRow { row: *row, rect: rect(panel.left, y, panel.right, y + row_height) };
-            y += row_height;
-            entry
-        })
-        .collect();
-    Menu { panel, rows }
 }
 
 /// Slider value (0.0-1.0) for a horizontal position on `track`, clamped to the ends.
@@ -254,53 +274,51 @@ mod tests {
     }
 
     #[test]
-    fn test_menu_hangs_under_the_button_and_stays_inside() {
-        let layout = compute(400.0, 600.0, 1);
-        let rows = [
-            menu::Row::Command { id: 1, label: "One", checked: false },
-            menu::Row::Separator,
-            menu::Row::Command { id: 2, label: "Two", checked: true },
-        ];
-        let panel = menu(&layout.menu_button, 400.0, 600.0, &rows);
+    fn test_options_sit_above_the_status_bar() {
+        // Both lines start after their label and end at the right margin.
+        let layout = compute(384.0, 600.0, 2, true);
+        let options = &layout.options;
 
-        // Under the button, inside the window, and never over the button itself.
-        assert!(panel.panel.top >= layout.menu_button.bottom);
-        assert!(panel.panel.left >= MARGIN);
-        assert!(panel.panel.right <= 400.0 - MARGIN);
-        assert!(panel.panel.bottom <= 600.0 - MARGIN);
-        assert!(panel.panel.left < layout.menu_button.right);
+        assert_eq!(options.labels.len(), 2);
+        assert_eq!(options.themes.len(), 4);
+        assert_eq!(options.themes[0].left, options.labels[0].right + OPTION_GAP);
+        assert_eq!(options.themes[3].right, 384.0 - MARGIN);
+        let remove = options.remove.expect("a picture is set");
+        assert_eq!(remove.right, 384.0 - MARGIN);
 
-        // One entry per row, stacked, inside the panel.
-        assert_eq!(panel.rows.len(), 3);
-        for pair in panel.rows.windows(2) {
-            assert!(pair[0].rect.bottom <= pair[1].rect.top);
+        // The first line is above the second, which is above the status bar.
+        assert!(options.labels[0].top < options.labels[1].top);
+        assert!(options.themes[0].bottom < options.sync.top);
+        assert!(options.sync.bottom < layout.status_bar.top);
+        for pair in options.themes.windows(2) {
+            assert!(pair[0].right < pair[1].left);
         }
-        assert!(panel.rows[0].rect.top >= panel.panel.top);
-        assert!(panel.rows[2].rect.bottom <= panel.panel.bottom);
+        assert!(options.sync.right < options.picture.left);
+        assert!(options.picture.right < remove.left);
 
-        // Only commands are clickable, and a point outside hits nothing.
-        let (x, y) = center(&panel.rows[0].rect);
-        assert_eq!(panel.hit(x, y), Some((0, 1)));
-        let (x, y) = center(&panel.rows[1].rect);
-        assert_eq!(panel.hit(x, y), None);
-        let (x, y) = center(&panel.rows[2].rect);
-        assert_eq!(panel.hit(x, y), Some((2, 2)));
-        assert_eq!(panel.hit(0.0, 0.0), None);
+        // Every control is clickable; the labels and the gaps are not.
+        let (x, y) = center(&options.themes[2]);
+        assert_eq!(layout.hit_test(x, y), Some(Hit::Theme(2)));
+        let (x, y) = center(&options.sync);
+        assert_eq!(layout.hit_test(x, y), Some(Hit::Sync));
+        let (x, y) = center(&options.picture);
+        assert_eq!(layout.hit_test(x, y), Some(Hit::Picture));
+        let (x, y) = center(&remove);
+        assert_eq!(layout.hit_test(x, y), Some(Hit::RemovePicture));
+        let (x, y) = center(&options.labels[0]);
+        assert_eq!(layout.hit_test(x, y), None);
+        assert_eq!(layout.hit_test(0.0, 0.0), None);
     }
 
     #[test]
-    fn test_menu_button_sits_at_the_top_right() {
-        let layout = compute(400.0, 600.0, 1);
-        assert_eq!(layout.menu_button.right, 400.0 - MARGIN);
-        assert!(layout.menu_button.bottom <= layout.rows[0].icon.top);
-        assert!(layout.title.right <= layout.menu_button.left);
-        let (x, y) = center(&layout.menu_button);
-        assert_eq!(layout.hit_test(x, y), Some(Hit::Menu));
+    fn test_remove_button_only_while_a_picture_is_set() {
+        assert!(compute(400.0, 600.0, 1, false).options.remove.is_none());
+        assert!(compute(400.0, 600.0, 1, true).options.remove.is_some());
     }
 
     #[test]
     fn test_rows_do_not_overlap() {
-        let layout = compute(400.0, 600.0, 4);
+        let layout = compute(400.0, 600.0, 4, false);
         assert_eq!(layout.rows.len(), 4);
         for row in &layout.rows {
             assert!(row.icon.bottom <= row.hit.top);
@@ -323,7 +341,7 @@ mod tests {
     #[test]
     fn test_hit_area_contains_track() {
         for width in [10.0, 400.0, 1200.0] {
-            for row in compute(width, 600.0, 2).rows {
+            for row in compute(width, 600.0, 2, false).rows {
                 assert!(row.hit.left <= row.track.left);
                 assert!(row.hit.right >= row.track.right);
                 assert!(row.hit.top <= row.track.top);
@@ -334,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_value_is_flush_right() {
-        let layout = compute(400.0, 600.0, 1);
+        let layout = compute(400.0, 600.0, 1, false);
         let row = layout.rows[0];
         assert_eq!(row.value.right, 400.0 - MARGIN);
         assert_eq!(row.track.right, 400.0 - MARGIN);
@@ -345,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_narrow_window_keeps_track_width_positive() {
-        let layout = compute(10.0, 50.0, 1);
+        let layout = compute(10.0, 50.0, 1, false);
         let track = layout.rows[0].track;
         assert!(track.right - track.left >= 1.0);
         assert!(layout.rows[0].label.right >= layout.rows[0].label.left);
@@ -354,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_and_tooltip_anchor_to_bottom() {
-        let layout = compute(400.0, 600.0, 1);
+        let layout = compute(400.0, 600.0, 1, false);
         assert_eq!(layout.status_bar.bottom, 600.0);
         assert_eq!(layout.status_bar.top, 600.0 - STATUS_BAR_HEIGHT);
         assert!(layout.tooltip.bottom < layout.status_bar.top);
@@ -366,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_hit_test() {
-        let layout = compute(400.0, 600.0, 2);
+        let layout = compute(400.0, 600.0, 2, false);
         let (vx, vy) = center(&layout.rows[1].value);
         assert_eq!(layout.hit_test(vx, vy), Some(Hit::Value(1)));
 
@@ -385,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_value_at_and_thumb_x_round_trip() {
-        let track = compute(400.0, 600.0, 1).rows[0].track;
+        let track = compute(400.0, 600.0, 1, false).rows[0].track;
         assert_eq!(value_at(&track, track.left), 0.0);
         assert_eq!(value_at(&track, track.right), 1.0);
         assert_eq!(value_at(&track, track.left - 50.0), 0.0);

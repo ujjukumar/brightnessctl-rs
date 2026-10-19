@@ -30,6 +30,20 @@ impl ThemeMode {
             ThemeMode::Auto => system_dark,
         }
     }
+
+    /// The themes in the order their buttons are laid out, left to right.
+    pub const ALL: [ThemeMode; 4] =
+        [ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark, ThemeMode::Glass];
+
+    /// The name shown on this theme's button.
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeMode::Auto => "Auto",
+            ThemeMode::Light => "Light",
+            ThemeMode::Dark => "Dark",
+            ThemeMode::Glass => "Glass",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
