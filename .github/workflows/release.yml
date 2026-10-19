@@ -75,21 +75,9 @@ jobs:
         run: cargo build --release --locked
 
       - name: Package
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $pkg = "brightnessctl-$env:TAG-windows-x86_64"
-          New-Item -ItemType Directory -Path "dist/$pkg" -Force | Out-Null
-          Copy-Item target/release/brightnessctl.exe, README.md, LICENSE -Destination "dist/$pkg"
-          Compress-Archive -Path "dist/$pkg/*" -DestinationPath "dist/$pkg.zip"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
           Copy-Item target/release/brightnessctl.exe -Destination dist
-
-          Push-Location dist
-          Get-FileHash "$pkg.zip", brightnessctl.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
-            Set-Content checksums.txt -Encoding ascii
-          Get-Content checksums.txt
-          Pop-Location
 
       - name: Publish release
         env:
@@ -97,4 +85,4 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           gh release create $env:TAG --target $env:COMMIT --title "brightnessctl $env:TAG" --generate-notes `
-            "dist/brightnessctl-$env:TAG-windows-x86_64.zip" dist/brightnessctl.exe dist/checksums.txt
+            dist/brightnessctl.exe

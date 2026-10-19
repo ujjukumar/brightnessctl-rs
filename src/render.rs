@@ -45,6 +45,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -188,6 +190,8 @@ pub struct Renderer {
     text_format_title: Option<IDWriteTextFormat>,
     /// Option buttons: 14pt, centred between the top and bottom of the button.
     text_format_button: Option<IDWriteTextFormat>,
+    /// The label of the current choice: the same size, but semibold.
+    text_format_button_bold: Option<IDWriteTextFormat>,
     text_format_label: Option<IDWriteTextFormat>,
     brush_bg: Option<ID2D1SolidColorBrush>,
     brush_fg: Option<ID2D1SolidColorBrush>,
@@ -226,6 +230,7 @@ impl Renderer {
                 render_target: None,
                 text_format_title: None,
                 text_format_button: None,
+                text_format_button_bold: None,
                 text_format_label: None,
                 brush_bg: None,
                 brush_fg: None,
@@ -356,7 +361,23 @@ impl Renderer {
                 w!("en-us"),
             )?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             self.text_format_button = Some(format);
+        }
+
+        if self.text_format_button_bold.is_none() {
+            let format = self.dw_factory.CreateTextFormat(
+                w!("Segoe UI"),
+                None,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                14.0,
+                w!("en-us"),
+            )?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            self.text_format_button_bold = Some(format);
         }
 
         if self.text_format_label.is_none() {
@@ -725,37 +746,40 @@ impl Renderer {
         state: &AppState,
         palette: &ColorPalette,
     ) {
-        // The two line labels, in the spare space left of the buttons.
+        // The two line labels, in the spare space left of the controls.
         for (label, area) in ["Theme", "Display"].iter().zip(&options.labels) {
             let text: Vec<u16> = label.encode_utf16().collect();
             rt.DrawText(
                 &text,
                 self.text_format_label.as_ref().unwrap(),
                 area,
-                self.brush_subdued.as_ref().unwrap(),
+                self.brush_fg.as_ref().unwrap(),
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
 
-        // One button per theme, with the current one lit.
+        // The four themes share one panel, with the current one lit inside it.
+        let panel = rounded_rect(&options.theme_panel, layout::OPTION_RADIUS);
+        rt.FillRoundedRectangle(&panel, self.brush_card.as_ref().unwrap());
+        rt.DrawRoundedRectangle(&panel, self.brush_border.as_ref().unwrap(), 1.0, None);
         for (i, area) in options.themes.iter().enumerate() {
             let Some(theme) = ThemeMode::ALL.get(i).copied() else {
                 break;
             };
-            self.draw_control(rt, area, theme.label(), state.settings.theme == theme, palette);
+            self.draw_segment(rt, area, theme.label(), state.settings.theme == theme, palette);
         }
 
         // Sync is a toggle, so it is lit the same way while it is on.
-        self.draw_control(rt, &options.sync, "Sync", state.lock_mode, palette);
-        self.draw_control(rt, &options.picture, "Picture\u{2026}", false, palette);
+        self.draw_control(rt, &options.sync, "Sync", state.lock_mode, true, palette);
+        self.draw_control(rt, &options.picture, "Picture\u{2026}", false, false, palette);
         if let Some(remove) = &options.remove {
-            self.draw_control(rt, remove, "Remove", false, palette);
+            self.draw_control(rt, remove, "Remove", false, false, palette);
         }
     }
 
-    /// Draws one option button: an outline, tinted while it is the current choice.
-    unsafe fn draw_control(
+    /// Draws one theme button inside the shared panel, lit while it is the current theme.
+    unsafe fn draw_segment(
         &self,
         rt: &ID2D1RenderTarget,
         area: &D2D_RECT_F,
@@ -763,33 +787,82 @@ impl Renderer {
         active: bool,
         palette: &ColorPalette,
     ) {
-        let shape = D2D1_ROUNDED_RECT {
-            rect: *area,
-            radiusX: layout::OPTION_RADIUS,
-            radiusY: layout::OPTION_RADIUS,
-        };
+        if active {
+            // The lit button is inset, so the panel reads as one control with a knob in it.
+            let inner = D2D_RECT_F {
+                left: area.left + layout::SEGMENT_INSET,
+                top: area.top + layout::SEGMENT_INSET,
+                right: area.right - layout::SEGMENT_INSET,
+                bottom: area.bottom - layout::SEGMENT_INSET,
+            };
+            let shape = rounded_rect(&inner, layout::OPTION_RADIUS - layout::SEGMENT_INSET);
+            let fill = self.brush_fill.as_ref().unwrap();
+            fill.SetColor(&D2D1_COLOR_F { a: 0.30, ..palette.accent });
+            rt.FillRoundedRectangle(&shape, fill);
+            rt.DrawRoundedRectangle(&shape, self.brush_accent.as_ref().unwrap(), 1.0, None);
+        }
+        self.draw_control_text(rt, area, label, active);
+    }
+
+    /// Draws one option button: a pill, tinted while it is the current choice. `icon` puts
+    /// the sync glyph on its leading edge.
+    unsafe fn draw_control(
+        &self,
+        rt: &ID2D1RenderTarget,
+        area: &D2D_RECT_F,
+        label: &str,
+        active: bool,
+        icon: bool,
+        palette: &ColorPalette,
+    ) {
+        let shape = rounded_rect(area, layout::OPTION_RADIUS);
         // A tint of the accent keeps the label legible on every theme, where a solid
         // accent fill would leave white text on the pale end of the gradient.
-        let (fill, border, text_brush) = if active {
+        if active {
             let fill = self.brush_fill.as_ref().unwrap();
-            fill.SetColor(&D2D1_COLOR_F { a: 0.22, ..palette.accent });
-            (fill, self.brush_accent.as_ref().unwrap(), self.brush_fg.as_ref().unwrap())
+            fill.SetColor(&D2D1_COLOR_F { a: 0.30, ..palette.accent });
+            rt.FillRoundedRectangle(&shape, fill);
+            rt.DrawRoundedRectangle(&shape, self.brush_accent.as_ref().unwrap(), 1.0, None);
         } else {
-            (
-                self.brush_card.as_ref().unwrap(),
-                self.brush_border.as_ref().unwrap(),
-                self.brush_subdued.as_ref().unwrap(),
-            )
-        };
-        rt.FillRoundedRectangle(&shape, fill);
-        rt.DrawRoundedRectangle(&shape, border, 1.0, None);
+            rt.FillRoundedRectangle(&shape, self.brush_card.as_ref().unwrap());
+            rt.DrawRoundedRectangle(&shape, self.brush_border.as_ref().unwrap(), 1.0, None);
+        }
 
+        // The glyph is always drawn, so the label does not shift when sync is toggled.
+        let mut text_area = *area;
+        if icon {
+            let middle = (area.top + area.bottom) / 2.0;
+            let glyph = D2D_RECT_F {
+                left: area.left + 11.0,
+                top: middle - 6.5,
+                right: area.left + 24.0,
+                bottom: middle + 6.5,
+            };
+            draw_sync_icon(rt, &glyph, self.brush_fg.as_ref().unwrap());
+            text_area.left = area.left + 22.0;
+        }
+        self.draw_control_text(rt, &text_area, label, active);
+    }
+
+    /// Draws a control's label: semibold in `fg` while it is the current choice.
+    unsafe fn draw_control_text(
+        &self,
+        rt: &ID2D1RenderTarget,
+        area: &D2D_RECT_F,
+        label: &str,
+        active: bool,
+    ) {
+        let (format, brush) = if active {
+            (self.text_format_button_bold.as_ref().unwrap(), self.brush_fg.as_ref().unwrap())
+        } else {
+            (self.text_format_button.as_ref().unwrap(), self.brush_subdued.as_ref().unwrap())
+        };
         let text: Vec<u16> = label.encode_utf16().collect();
         rt.DrawText(
             &text,
-            self.text_format_button.as_ref().unwrap(),
+            format,
             area,
-            text_brush,
+            brush,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
             DWRITE_MEASURING_MODE_NATURAL,
         );
@@ -827,6 +900,56 @@ fn card_rect(area: &D2D_RECT_F) -> D2D1_ROUNDED_RECT {
         rect: *area,
         radiusX: layout::CARD_RADIUS,
         radiusY: layout::CARD_RADIUS,
+    }
+}
+
+/// A rounded rectangle the size of `area`, with `radius` corners.
+fn rounded_rect(area: &D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: *area,
+        radiusX: radius,
+        radiusY: radius,
+    }
+}
+
+/// The sync glyph: a ring drawn as two arcs, each ending in an arrow head (16-unit grid).
+unsafe fn draw_sync_icon(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+    let g = IconGrid::new(area, 16.0);
+    let center = g.point(8.0, 8.0);
+    let radius = g.len(5.5);
+    let stroke = g.len(1.5);
+    let at = |degrees: f32| {
+        let radians = degrees.to_radians();
+        Vector2 {
+            X: center.X + radius * radians.cos(),
+            Y: center.Y + radius * radians.sin(),
+        }
+    };
+
+    // Y grows downwards, so 0 degrees is right, 90 down, 180 left and 270 up: the first arc
+    // crosses the top from left to right and the second returns under the bottom.
+    for (from, to) in [(190.0_f32, 335.0_f32), (10.0, 155.0)] {
+        let steps = 8;
+        let mut last = at(from);
+        for step in 1..=steps {
+            let point = at(from + (to - from) * step as f32 / steps as f32);
+            rt.DrawLine(last, point, brush, stroke, None);
+            last = point;
+        }
+
+        // An arrow head at the far end, pointing the way the arc travels.
+        let radians = to.to_radians();
+        let tangent = Vector2 { X: -radians.sin(), Y: radians.cos() };
+        let radial = Vector2 { X: radians.cos(), Y: radians.sin() };
+        let size = g.len(2.6);
+        let back = Vector2 { X: last.X - tangent.X * size, Y: last.Y - tangent.Y * size };
+        for side in [-1.0_f32, 1.0] {
+            let tip = Vector2 {
+                X: back.X + radial.X * size * side,
+                Y: back.Y + radial.Y * size * side,
+            };
+            rt.DrawLine(tip, last, brush, stroke, None);
+        }
     }
 }
 

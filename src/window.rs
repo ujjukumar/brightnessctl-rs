@@ -15,11 +15,32 @@ use windows::{
 const CLIENT_WIDTH: i32 = 384;
 const CLIENT_HEIGHT: i32 = 544;
 
+/// Smallest client area the window may be resized to, in DIPs: the two option lines need
+/// the full width, and the height has to clear the header, one monitor row, the options
+/// and the status bar.
+pub const MIN_CLIENT_WIDTH: i32 = 384;
+pub const MIN_CLIENT_HEIGHT: i32 = 320;
+
 /// The main window's class; a second launch finds the running window by it.
 pub const CLASS_NAME: PCWSTR = w!("BrightnessCtlWindow");
 
 fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
+}
+
+/// The smallest window size in physical pixels, for `WM_GETMINMAXINFO`: the frame is
+/// added to the minimum client area exactly as `create` adds it to the default one.
+pub fn min_window_size(dpi: u32) -> (i32, i32) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: scale_for_dpi(MIN_CLIENT_WIDTH, dpi),
+        bottom: scale_for_dpi(MIN_CLIENT_HEIGHT, dpi),
+    };
+    let _ = unsafe {
+        AdjustWindowRectExForDpi(&mut rect, WS_OVERLAPPEDWINDOW, false, WINDOW_EX_STYLE::default(), dpi)
+    };
+    (rect.right - rect.left, rect.bottom - rect.top)
 }
 
 /// Draws the system title bar dark or light. Fails harmlessly on Windows versions
@@ -183,6 +204,20 @@ mod tests {
         assert_eq!(scale_for_dpi(384, 120), 480);
         assert_eq!(scale_for_dpi(384, 144), 576);
         assert_eq!(scale_for_dpi(544, 168), 952);
+    }
+
+    #[test]
+    fn test_min_window_size_holds_the_frame_and_scales() {
+        let (width, height) = min_window_size(96);
+        // The client area is at least the minimum, and the frame is added on top.
+        assert!(width >= MIN_CLIENT_WIDTH);
+        assert!(height >= MIN_CLIENT_HEIGHT);
+        assert!(width > MIN_CLIENT_WIDTH);
+        assert!(height > MIN_CLIENT_HEIGHT);
+        // At 125% the minimum window grows with the DIPs it has to hold.
+        let (wide, tall) = min_window_size(120);
+        assert!(wide > width);
+        assert!(tall > height);
     }
 
     #[test]
