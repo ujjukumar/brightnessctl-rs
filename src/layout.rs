@@ -6,6 +6,8 @@
 
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F as Rect;
 
+use crate::menu;
+
 pub const MARGIN: f32 = 24.0;
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 
@@ -29,6 +31,15 @@ const TRACK_HIT_PADDING: f32 = 12.0;
 const TOOLTIP_WIDTH: f32 = 300.0;
 const TOOLTIP_HEIGHT: f32 = 100.0;
 const TOOLTIP_GAP: f32 = 8.0;
+const MENU_WIDTH: f32 = 208.0;
+const MENU_ROW_HEIGHT: f32 = 30.0;
+const MENU_SEPARATOR_HEIGHT: f32 = 9.0;
+/// Padding inside the menu panel, above the first row and below the last.
+const MENU_PAD: f32 = 6.0;
+/// Space between the header button and the panel hanging under it.
+const MENU_GAP: f32 = 4.0;
+/// Left and right padding of the text in a menu row; the renderer uses it too.
+pub const MENU_INSET: f32 = 16.0;
 
 /// One monitor's row: card, icon, name label, percentage value, slider track and its
 /// click area.
@@ -158,6 +169,55 @@ impl Layout {
     }
 }
 
+/// One placed row of the open menu.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MenuRow {
+    pub row: menu::Row,
+    pub rect: Rect,
+}
+
+/// The open menu: its panel and its rows, top to bottom.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Menu {
+    pub panel: Rect,
+    pub rows: Vec<MenuRow>,
+}
+
+impl Menu {
+    /// The command under the point, along with the row it is in so it can be highlighted.
+    pub fn hit(&self, x: f32, y: f32) -> Option<(usize, u16)> {
+        self.rows.iter().enumerate().find_map(|(i, entry)| match entry.row {
+            menu::Row::Command { id, .. } if contains(&entry.rect, x, y) => Some((i, id)),
+            _ => None,
+        })
+    }
+}
+
+/// Hangs the menu under the header button inside a client area of `width` x `height`.
+pub fn menu(anchor: &Rect, width: f32, height: f32, rows: &[menu::Row]) -> Menu {
+    let height_of = |row: &menu::Row| match row {
+        menu::Row::Separator => MENU_SEPARATOR_HEIGHT,
+        menu::Row::Command { .. } => MENU_ROW_HEIGHT,
+    };
+    let panel_height = rows.iter().map(height_of).sum::<f32>() + MENU_PAD * 2.0;
+    // Right-aligned with the button, and kept inside the window on both axes.
+    let left = (anchor.right - MENU_WIDTH).clamp(MARGIN, (width - MARGIN - MENU_WIDTH).max(MARGIN));
+    let top = (anchor.bottom + MENU_GAP).min((height - MARGIN - panel_height).max(MARGIN));
+    let panel = rect(left, top, left + MENU_WIDTH, top + panel_height);
+
+    let mut y = panel.top + MENU_PAD;
+    let rows = rows
+        .iter()
+        .map(|row| {
+            let row_height = height_of(row);
+            let entry = MenuRow { row: *row, rect: rect(panel.left, y, panel.right, y + row_height) };
+            y += row_height;
+            entry
+        })
+        .collect();
+    Menu { panel, rows }
+}
+
 /// Slider value (0.0-1.0) for a horizontal position on `track`, clamped to the ends.
 pub fn value_at(track: &Rect, x: f32) -> f32 {
     let width = (track.right - track.left).max(1.0);
@@ -177,11 +237,6 @@ pub fn px_to_dip(px: i32, dpi: u32) -> f32 {
     px as f32 * 96.0 / dpi as f32
 }
 
-/// Converts DIPs to physical pixels for a window at `dpi`.
-pub fn dip_to_px(dip: f32, dpi: u32) -> i32 {
-    (dip * dpi as f32 / 96.0).round() as i32
-}
-
 fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {
     Rect { left, top, right, bottom }
 }
@@ -196,6 +251,41 @@ mod tests {
 
     fn center(r: &Rect) -> (f32, f32) {
         ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0)
+    }
+
+    #[test]
+    fn test_menu_hangs_under_the_button_and_stays_inside() {
+        let layout = compute(400.0, 600.0, 1);
+        let rows = [
+            menu::Row::Command { id: 1, label: "One", checked: false },
+            menu::Row::Separator,
+            menu::Row::Command { id: 2, label: "Two", checked: true },
+        ];
+        let panel = menu(&layout.menu_button, 400.0, 600.0, &rows);
+
+        // Under the button, inside the window, and never over the button itself.
+        assert!(panel.panel.top >= layout.menu_button.bottom);
+        assert!(panel.panel.left >= MARGIN);
+        assert!(panel.panel.right <= 400.0 - MARGIN);
+        assert!(panel.panel.bottom <= 600.0 - MARGIN);
+        assert!(panel.panel.left < layout.menu_button.right);
+
+        // One entry per row, stacked, inside the panel.
+        assert_eq!(panel.rows.len(), 3);
+        for pair in panel.rows.windows(2) {
+            assert!(pair[0].rect.bottom <= pair[1].rect.top);
+        }
+        assert!(panel.rows[0].rect.top >= panel.panel.top);
+        assert!(panel.rows[2].rect.bottom <= panel.panel.bottom);
+
+        // Only commands are clickable, and a point outside hits nothing.
+        let (x, y) = center(&panel.rows[0].rect);
+        assert_eq!(panel.hit(x, y), Some((0, 1)));
+        let (x, y) = center(&panel.rows[1].rect);
+        assert_eq!(panel.hit(x, y), None);
+        let (x, y) = center(&panel.rows[2].rect);
+        assert_eq!(panel.hit(x, y), Some((2, 2)));
+        assert_eq!(panel.hit(0.0, 0.0), None);
     }
 
     #[test]
