@@ -51,7 +51,6 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
 use crate::layout;
-use crate::menu;
 use crate::state::Backend;
 use crate::background::{self, Picture};
 use crate::settings::ThemeMode;
@@ -124,7 +123,8 @@ pub struct ColorPalette {
     pub fg: D2D1_COLOR_F,
     pub accent: D2D1_COLOR_F,
     pub subdued: D2D1_COLOR_F,
-    /// Fill and outline of the header menu, and of the cards on the glass theme.
+    /// Fill and outline of the panels: the option buttons everywhere, and the row cards
+    /// and status bar on the glass theme.
     pub card: D2D1_COLOR_F,
     pub border: D2D1_COLOR_F,
 }
@@ -138,7 +138,7 @@ impl ColorPalette {
             fg: D2D1_COLOR_F { r: 0.95, g: 0.95, b: 0.95, a: 1.0 },
             accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
             subdued: D2D1_COLOR_F { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
-            // The menu panel: lighter than the window, so its edge reads.
+            // The option buttons: lighter than the window, so their edges read.
             card: D2D1_COLOR_F { r: 0.17, g: 0.17, b: 0.17, a: 1.0 },
             border: D2D1_COLOR_F { r: 0.32, g: 0.32, b: 0.32, a: 1.0 },
         }
@@ -152,7 +152,7 @@ impl ColorPalette {
             fg: D2D1_COLOR_F { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
             accent: D2D1_COLOR_F { r: 0.0, g: 0.47, b: 0.83, a: 1.0 },
             subdued: D2D1_COLOR_F { r: 0.4, g: 0.4, b: 0.4, a: 1.0 },
-            // The menu panel: white on the grey window, so its edge reads.
+            // The option buttons: white on the grey window, so their edges read.
             card: D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
             border: D2D1_COLOR_F { r: 0.82, g: 0.82, b: 0.82, a: 1.0 },
         }
@@ -186,8 +186,8 @@ pub struct Renderer {
     dw_factory: IDWriteFactory,
     render_target: Option<ID2D1HwndRenderTarget>,
     text_format_title: Option<IDWriteTextFormat>,
-    /// Header menu rows: 14pt, centred between the top and bottom of the row.
-    text_format_menu: Option<IDWriteTextFormat>,
+    /// Option buttons: 14pt, centred between the top and bottom of the button.
+    text_format_button: Option<IDWriteTextFormat>,
     text_format_label: Option<IDWriteTextFormat>,
     brush_bg: Option<ID2D1SolidColorBrush>,
     brush_fg: Option<ID2D1SolidColorBrush>,
@@ -225,7 +225,7 @@ impl Renderer {
                 )?,
                 render_target: None,
                 text_format_title: None,
-                text_format_menu: None,
+                text_format_button: None,
                 text_format_label: None,
                 brush_bg: None,
                 brush_fg: None,
@@ -345,7 +345,7 @@ impl Renderer {
             )?);
         }
 
-        if self.text_format_menu.is_none() {
+        if self.text_format_button.is_none() {
             let format = self.dw_factory.CreateTextFormat(
                 w!("Segoe UI"),
                 None,
@@ -356,7 +356,7 @@ impl Renderer {
                 w!("en-us"),
             )?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            self.text_format_menu = Some(format);
+            self.text_format_button = Some(format);
         }
 
         if self.text_format_label.is_none() {
@@ -418,7 +418,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, hwnd: HWND, state: &AppState, menu: &menu::State) -> Result<()> {
+    pub fn render(&mut self, hwnd: HWND, state: &AppState) -> Result<()> {
         unsafe {
             let style = ThemeStyle::of(state);
             if self.create_resources(hwnd, style).is_err() {
@@ -438,7 +438,12 @@ impl Renderer {
 
             // GetSize reports DIPs, matching what input handling computes from pixels.
             let size = rt.GetSize();
-            let layout = layout::compute(size.width, size.height, state.monitors.len());
+            let layout = layout::compute(
+                size.width,
+                size.height,
+                state.monitors.len(),
+                state.settings.background_image.is_some(),
+            );
             let window_rect = D2D_RECT_F {
                 left: 0.0,
                 top: 0.0,
@@ -507,19 +512,6 @@ impl Renderer {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
-
-            // The menu is behind a button in the header, so the window has no menu bar.
-            if style.has_cards() {
-                self.draw_frosted(&rt, &layout.menu_button, &window_rect, dim);
-                let chip = D2D1_ROUNDED_RECT {
-                    rect: layout.menu_button,
-                    radiusX: layout::CARD_RADIUS * 0.6,
-                    radiusY: layout::CARD_RADIUS * 0.6,
-                };
-                rt.FillRoundedRectangle(&chip, self.brush_card.as_ref().unwrap());
-                rt.DrawRoundedRectangle(&chip, self.brush_border.as_ref().unwrap(), 1.0, None);
-            }
-            draw_menu_button(&rt, &layout.menu_button, self.brush_fg.as_ref().unwrap());
 
             for (i, (monitor, row)) in state.monitors.iter().zip(&layout.rows).enumerate() {
                 if style.has_cards() {
@@ -629,6 +621,9 @@ impl Renderer {
                 );
             }
 
+            // The option controls under the sliders, over anything the rows reach.
+            self.draw_options(&rt, &layout.options, state, &palette);
+
             // Status Bar at the bottom
             let status_rect = layout.status_bar;
             
@@ -710,12 +705,6 @@ impl Renderer {
                 );
             }
 
-            // The header menu, drawn last so it sits over everything else on screen.
-            if menu.open {
-                let open = layout::menu(&layout.menu_button, size.width, size.height, &menu::rows(state));
-                self.draw_menu(&rt, &open, &window_rect, &palette, dim, menu.hover);
-            }
-
             // The device was lost (driver reset, GPU switch, some remote sessions):
             // rebuild the device resources and paint again.
             if let Err(err) = rt.EndDraw(None, None)
@@ -728,99 +717,82 @@ impl Renderer {
         }
     }
 
-    /// Draws the open header menu: one themed panel with a row per entry.
-    unsafe fn draw_menu(
+    /// Draws the option controls under the sliders: the themes, sync and the picture.
+    unsafe fn draw_options(
         &self,
         rt: &ID2D1RenderTarget,
-        menu: &layout::Menu,
-        window: &D2D_RECT_F,
+        options: &layout::Options,
+        state: &AppState,
         palette: &ColorPalette,
-        opacity: f32,
-        hover: Option<usize>,
     ) {
-        let panel = menu.panel;
-        // Over a picture the panel is frosted, like the row cards.
-        self.draw_frosted(rt, &panel, window, opacity);
-        let card = card_rect(&panel);
-        // A menu has to stay readable over whatever it covers, so its panel is far more
-        // opaque than the row cards on the glass theme.
-        let card_brush = self.brush_card.as_ref().unwrap();
-        card_brush.SetColor(&D2D1_COLOR_F { a: palette.card.a.max(0.92), ..palette.card });
-        rt.FillRoundedRectangle(&card, card_brush);
-        // The cards drawn earlier expect the palette's own fill.
-        card_brush.SetColor(&palette.card);
-        rt.DrawRoundedRectangle(&card, self.brush_border.as_ref().unwrap(), 1.0, None);
-
-        for (i, entry) in menu.rows.iter().enumerate() {
-            let row = entry.rect;
-            match entry.row {
-                menu::Row::Separator => {
-                    // A hairline in the middle of the gap between two groups.
-                    let middle = (row.top + row.bottom) / 2.0;
-                    let line = D2D_RECT_F {
-                        left: row.left + layout::MENU_INSET,
-                        top: middle,
-                        right: row.right - layout::MENU_INSET,
-                        bottom: middle + 1.0,
-                    };
-                    rt.FillRectangle(&line, self.brush_border.as_ref().unwrap());
-                }
-                menu::Row::Command { label, checked, .. } => {
-                    if hover == Some(i) {
-                        // A soft tint of the accent, which reads on every theme's panel.
-                        let accent = self.brush_fill.as_ref().unwrap();
-                        accent.SetColor(&D2D1_COLOR_F { a: 0.18, ..palette.accent });
-                        let highlight = D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: row.left + 4.0,
-                                top: row.top + 1.0,
-                                right: row.right - 4.0,
-                                bottom: row.bottom - 1.0,
-                            },
-                            radiusX: 6.0,
-                            radiusY: 6.0,
-                        };
-                        rt.FillRoundedRectangle(&highlight, accent);
-                    }
-
-                    let text: Vec<u16> = label.encode_utf16().collect();
-                    rt.DrawText(
-                        &text,
-                        self.text_format_menu.as_ref().unwrap(),
-                        &D2D_RECT_F {
-                            left: row.left + layout::MENU_INSET,
-                            top: row.top,
-                            right: row.right - layout::MENU_INSET,
-                            bottom: row.bottom,
-                        },
-                        self.brush_fg.as_ref().unwrap(),
-                        D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        DWRITE_MEASURING_MODE_NATURAL,
-                    );
-
-                    if checked {
-                        // A tick in the accent colour, on the trailing edge of the row.
-                        let accent = self.brush_accent.as_ref().unwrap();
-                        let middle = (row.top + row.bottom) / 2.0;
-                        let right = row.right - layout::MENU_INSET;
-                        rt.DrawLine(
-                            Vector2 { X: right - 7.0, Y: middle },
-                            Vector2 { X: right - 3.0, Y: middle + 3.5 },
-                            accent,
-                            1.6,
-                            None,
-                        );
-                        rt.DrawLine(
-                            Vector2 { X: right - 3.0, Y: middle + 3.5 },
-                            Vector2 { X: right + 2.0, Y: middle - 4.0 },
-                            accent,
-                            1.6,
-                            None,
-                        );
-                    }
-                }
-            }
+        // The two line labels, in the spare space left of the buttons.
+        for (label, area) in ["Theme", "Display"].iter().zip(&options.labels) {
+            let text: Vec<u16> = label.encode_utf16().collect();
+            rt.DrawText(
+                &text,
+                self.text_format_label.as_ref().unwrap(),
+                area,
+                self.brush_subdued.as_ref().unwrap(),
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
         }
+
+        // One button per theme, with the current one lit.
+        for (i, area) in options.themes.iter().enumerate() {
+            let Some(theme) = ThemeMode::ALL.get(i).copied() else {
+                break;
+            };
+            self.draw_control(rt, area, theme.label(), state.settings.theme == theme, palette);
+        }
+
+        // Sync is a toggle, so it is lit the same way while it is on.
+        self.draw_control(rt, &options.sync, "Sync", state.lock_mode, palette);
+        self.draw_control(rt, &options.picture, "Picture\u{2026}", false, palette);
+        if let Some(remove) = &options.remove {
+            self.draw_control(rt, remove, "Remove", false, palette);
+        }
+    }
+
+    /// Draws one option button: an outline, tinted while it is the current choice.
+    unsafe fn draw_control(
+        &self,
+        rt: &ID2D1RenderTarget,
+        area: &D2D_RECT_F,
+        label: &str,
+        active: bool,
+        palette: &ColorPalette,
+    ) {
+        let shape = D2D1_ROUNDED_RECT {
+            rect: *area,
+            radiusX: layout::OPTION_RADIUS,
+            radiusY: layout::OPTION_RADIUS,
+        };
+        // A tint of the accent keeps the label legible on every theme, where a solid
+        // accent fill would leave white text on the pale end of the gradient.
+        let (fill, border, text_brush) = if active {
+            let fill = self.brush_fill.as_ref().unwrap();
+            fill.SetColor(&D2D1_COLOR_F { a: 0.22, ..palette.accent });
+            (fill, self.brush_accent.as_ref().unwrap(), self.brush_fg.as_ref().unwrap())
+        } else {
+            (
+                self.brush_card.as_ref().unwrap(),
+                self.brush_border.as_ref().unwrap(),
+                self.brush_subdued.as_ref().unwrap(),
+            )
+        };
+        rt.FillRoundedRectangle(&shape, fill);
+        rt.DrawRoundedRectangle(&shape, border, 1.0, None);
+
+        let text: Vec<u16> = label.encode_utf16().collect();
+        rt.DrawText(
+            &text,
+            self.text_format_button.as_ref().unwrap(),
+            area,
+            text_brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
     }
 
     /// Draws the blurred copy of the picture, cropped exactly like the sharp one, clipped to
@@ -898,15 +870,6 @@ unsafe fn draw_sun(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1Solid
         let (sin, cos) = (i as f32 * std::f32::consts::FRAC_PI_4).sin_cos();
         let ray = |r: f32| g.point(12.0 + cos * r, 12.0 + sin * r);
         rt.DrawLine(ray(7.5), ray(10.5), brush, g.len(2.0), None);
-    }
-}
-
-/// Header button: three stacked bars, the usual mark for a menu (16-unit grid).
-unsafe fn draw_menu_button(rt: &ID2D1RenderTarget, area: &D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
-    let g = IconGrid::new(area, 16.0);
-    let stroke = g.len(1.4);
-    for y in [5.0, 8.0, 11.0] {
-        rt.DrawLine(g.point(4.0, y), g.point(12.0, y), brush, stroke, None);
     }
 }
 

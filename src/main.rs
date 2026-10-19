@@ -12,7 +12,6 @@ mod state;
 mod render;
 mod layout;
 mod settings;
-mod menu;
 mod actions;
 mod hotkeys;
 mod worker;
@@ -49,8 +48,6 @@ struct App {
     hotkeys: hotkeys::HotkeyManager,
     /// Bumped by every `load_background`; only the newest decode result is used.
     background_generation: usize,
-    /// Whether the header menu is open, and which of its rows the pointer is over.
-    menu: menu::State,
 }
 
 /// Posted once the window is up: find the monitors and start their workers.
@@ -91,7 +88,6 @@ fn main() -> Result<()> {
             renderer: render::Renderer::new()?,
             hotkeys: hotkeys::HotkeyManager::new(),
             background_generation: 0,
-            menu: menu::State::default(),
         });
 
         let instance = GetModuleHandleW(None)?.into();
@@ -99,7 +95,7 @@ fn main() -> Result<()> {
         let frame = render::frame_colors(&app.borrow().state);
         // `app` outlives the window: the loop below only ends once the window is destroyed.
         let app_ptr = &app as *const RefCell<App> as *const std::ffi::c_void;
-        // The window is created without a menu: the header button opens the menus instead.
+        // The window is created without a menu bar; its controls are drawn in the client area.
         let hwnd = window::create(instance, "Brightness Control", Some(wnd_proc), None, dark, frame, Some(app_ptr))?;
         // Paint now; otherwise the first WM_PAINT would wait behind WM_APP_INIT.
         let _ = UpdateWindow(hwnd);
@@ -177,7 +173,7 @@ unsafe fn start_monitors(window: HWND, state: &mut AppState) {
     let _ = InvalidateRect(Some(window), None, false);
 }
 
-/// Finds the monitors again (menu or display change) and reports the count.
+/// Finds the monitors again (after a display change) and reports the count.
 unsafe fn refresh_monitors(window: HWND, reason: &str) {
     if let Some(mut app) = borrow_app(window) {
         let state = &mut app.state;
@@ -229,6 +225,16 @@ unsafe fn load_background(window: HWND, app: &mut App) {
     }
 }
 
+/// Asks for a picture to show behind the sliders, then stores and loads it.
+unsafe fn pick_background(window: HWND) {
+    let current =
+        borrow_app(window).and_then(|app| app.state.settings.background_image.clone());
+    // The dialog runs its own message loop, so the App must not be borrowed here.
+    if let Some(path) = background::pick_file(window, current.as_deref()) {
+        set_background(window, Some(path));
+    }
+}
+
 /// Stores the new background path, saves it and starts loading the picture.
 unsafe fn set_background(window: HWND, path: Option<std::path::PathBuf>) {
     let Some(mut app) = borrow_app(window) else {
@@ -266,14 +272,11 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             WM_KILLFOCUS => {
-                // Leaving the window commits a typed value, like clicking elsewhere, and
-                // puts the menu away: it belongs to the window that is no longer in front.
-                if let Some(mut app) = borrow_app(window) {
-                    let closed = app.menu.open;
-                    app.menu.open = false;
-                    if app.state.commit_edit() || closed {
-                        let _ = InvalidateRect(Some(window), None, false);
-                    }
+                // Leaving the window commits a typed value, like clicking elsewhere.
+                if let Some(mut app) = borrow_app(window)
+                    && app.state.commit_edit()
+                {
+                    let _ = InvalidateRect(Some(window), None, false);
                 }
                 LRESULT(0)
             }
@@ -286,41 +289,6 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
             WM_HOTKEY => {
                 let action_id = wparam.0 as i32;
                 handle_hotkey(window, action_id);
-                LRESULT(0)
-            }
-            WM_COMMAND => {
-                let id = (wparam.0 & 0xffff) as u16;
-                match id {
-                    menu::IDM_EXIT => {
-                        let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                    menu::IDM_LOCK_MODE => {
-                        if let Some(mut app) = borrow_app(window) {
-                            let state = &mut app.state;
-                            state.lock_mode = !state.lock_mode;
-                            state.status_message = if state.lock_mode {
-                                "Sync Mode Active".to_string()
-                            } else {
-                                "Sync Mode Disabled".to_string()
-                            };
-                            let _ = InvalidateRect(Some(window), None, false);
-                        }
-                    }
-                    menu::IDM_THEME_AUTO => set_theme(window, ThemeMode::Auto),
-                    menu::IDM_THEME_LIGHT => set_theme(window, ThemeMode::Light),
-                    menu::IDM_THEME_DARK => set_theme(window, ThemeMode::Dark),
-                    menu::IDM_THEME_GLASS => set_theme(window, ThemeMode::Glass),
-                    menu::IDM_BACKGROUND_PICK => {
-                        let current = borrow_app(window)
-                            .and_then(|app| app.state.settings.background_image.clone());
-                        // The dialog runs its own message loop, so the App must not be borrowed here.
-                        if let Some(path) = background::pick_file(window, current.as_deref()) {
-                            set_background(window, Some(path));
-                        }
-                    }
-                    menu::IDM_BACKGROUND_REMOVE => set_background(window, None),
-                    _ => {}
-                }
                 LRESULT(0)
             }
             // Direct2D paints the whole client area, so skip the erase that would flash first.
@@ -344,8 +312,8 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(window, &mut ps);
                 if let Some(mut app) = borrow_app(window) {
-                    let App { state, renderer, menu, .. } = &mut *app;
-                    let _ = renderer.render(window, state, menu);
+                    let App { state, renderer, .. } = &mut *app;
+                    let _ = renderer.render(window, state);
                 }
                 let _ = EndPaint(window, &ps);
                 LRESULT(0)
@@ -527,14 +495,7 @@ extern "system" fn wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: 
 
 unsafe fn handle_keydown(window: HWND, vk: VIRTUAL_KEY) {
     if let Some(mut app) = borrow_app(window) {
-        let App { state, menu, .. } = &mut *app;
-        // Escape closes the open menu; the edit box never sees that key.
-        if menu.open && vk == VK_ESCAPE {
-            menu.open = false;
-            menu.hover = None;
-            let _ = InvalidateRect(Some(window), None, false);
-            return;
-        }
+        let state = &mut app.state;
         let changed = match vk {
             VK_RETURN => state.commit_edit(),
             VK_ESCAPE => state.cancel_edit(),
@@ -607,107 +568,111 @@ unsafe fn handle_hotkey(window: HWND, action_id: i32) {
     }
 }
 
+/// A control picked in the client area, run once the `App` borrow has ended: setting the
+/// theme and opening the picture dialog both send messages back to the window.
+#[derive(Clone, Copy)]
+enum Command {
+    SetTheme(ThemeMode),
+    PickPicture,
+    RemovePicture,
+}
+
 unsafe fn handle_input(window: HWND, x: i32, y: i32, is_down: bool) {
-    // Set by a click on the open menu; sent once the borrow below has ended.
+    // Set by a click on one of the option buttons; run once the borrow below has ended.
     let mut command = None;
     if let Some(mut app) = borrow_app(window) {
-        let App { state, menu, .. } = &mut *app;
+        let App { state, .. } = &mut *app;
         // Mouse coordinates are physical pixels; the layout is in DIPs.
         let dpi = GetDpiForWindow(window);
         let mut rect = RECT::default();
         let _ = GetClientRect(window, &mut rect);
         let width = layout::px_to_dip(rect.right - rect.left, dpi);
         let height = layout::px_to_dip(rect.bottom - rect.top, dpi);
-        let layout = layout::compute(width, height, state.monitors.len());
+        let layout = layout::compute(
+            width,
+            height,
+            state.monitors.len(),
+            state.settings.background_image.is_some(),
+        );
         let x = layout::px_to_dip(x, dpi);
         let y = layout::px_to_dip(y, dpi);
 
-        if menu.open {
-            // The menu covers the window and takes the pointer first: a click is either one
-            // of its commands or a click outside it that puts it away. Neither moves a slider.
-            let open = layout::menu(&layout.menu_button, width, height, &menu::rows(state));
-            let hit = open.hit(x, y);
-            let hover = hit.map(|(index, _)| index);
-            if menu.hover != hover {
-                menu.hover = hover;
-                let _ = InvalidateRect(Some(window), None, false);
-            }
-            if is_down {
-                command = hit.map(|(_, id)| id);
-                menu.open = false;
-                menu.hover = None;
-                state.commit_edit();
-                let _ = InvalidateRect(Some(window), None, false);
-            }
-        } else {
-            let hit = layout.hit_test(x, y);
-            let hover_idx = match hit {
-                Some(Hit::Track(idx)) => Some(idx),
-                _ => None,
-            };
+        let hit = layout.hit_test(x, y);
+        let hover_idx = match hit {
+            Some(Hit::Track(idx)) => Some(idx),
+            _ => None,
+        };
 
-            if state.hover_monitor_idx != hover_idx {
-                state.hover_monitor_idx = hover_idx;
-                let _ = InvalidateRect(Some(window), None, false);
-            }
+        if state.hover_monitor_idx != hover_idx {
+            state.hover_monitor_idx = hover_idx;
+            let _ = InvalidateRect(Some(window), None, false);
+        }
 
-            // If clicking down, find which slider or label. Monitors still being probed (or
-            // that can't be controlled) ignore clicks. Clicking anywhere but the label being
-            // edited commits the typed value. Pressing on a track starts a drag.
-            if is_down {
-                let hit = hit.filter(|h| match h.index() {
-                    Some(idx) => state.monitors.get(idx).is_some_and(|m| m.accepts_input()),
-                    // The menu button is always clickable.
-                    None => true,
-                });
-                match hit {
-                    Some(Hit::Menu) => {
-                        state.commit_edit();
-                        // Our own menu, not a system pop-up: it opens on the press and stays
-                        // open, since nothing dismisses it on the way back up.
-                        state.hover_monitor_idx = None;
-                        menu.open = true;
-                        menu.hover = None;
-                    }
-                    Some(Hit::Value(idx)) => state.begin_edit(idx),
-                    Some(Hit::Track(idx)) => {
-                        state.commit_edit();
-                        state.active_monitor_idx = Some(idx);
-                    }
-                    None => {
-                        state.commit_edit();
-                    }
+        // If clicking down, find which control was hit. Monitors still being probed (or that
+        // can't be controlled) ignore clicks. Clicking anywhere but the label being edited
+        // commits the typed value. Pressing on a track starts a drag.
+        if is_down {
+            let hit = hit.filter(|h| match h.index() {
+                Some(idx) => state.monitors.get(idx).is_some_and(|m| m.accepts_input()),
+                // The window's own controls are always clickable.
+                None => true,
+            });
+            match hit {
+                Some(Hit::Theme(index)) => {
+                    command = ThemeMode::ALL.get(index).copied().map(Command::SetTheme);
                 }
-                let _ = InvalidateRect(Some(window), None, false);
-            }
-
-            // Processing movement/drag
-            if let Some(idx) = state.active_monitor_idx {
-                let (Some(row), Some(old_value)) = (layout.rows.get(idx), state.monitors.get(idx).map(|m| m.ui_value)) else {
-                    return;
-                };
-                let new_value = layout::value_at(&row.track, x);
-                let delta = new_value - old_value;
-
-                if delta.abs() > 0.001 {
-                    let targets: Vec<usize> = if state.lock_mode {
-                        state.apply_sync_delta(idx, delta);
-                        (0..state.monitors.len()).collect()
+                Some(Hit::Sync) => {
+                    state.lock_mode = !state.lock_mode;
+                    state.status_message = if state.lock_mode {
+                        "Sync Mode Active".to_string()
                     } else {
-                        state.set_absolute(&[idx], new_value);
-                        vec![idx]
+                        "Sync Mode Disabled".to_string()
                     };
-                    state.request_brightness(&targets);
-
-                    // Repaint
-                    let _ = InvalidateRect(Some(window), None, false);
                 }
+                Some(Hit::Picture) => command = Some(Command::PickPicture),
+                Some(Hit::RemovePicture) => command = Some(Command::RemovePicture),
+                Some(Hit::Value(idx)) => state.begin_edit(idx),
+                Some(Hit::Track(idx)) => {
+                    state.commit_edit();
+                    state.active_monitor_idx = Some(idx);
+                }
+                None => {
+                    state.commit_edit();
+                }
+            }
+            let _ = InvalidateRect(Some(window), None, false);
+        }
+
+        // Processing movement/drag
+        if let Some(idx) = state.active_monitor_idx {
+            let (Some(row), Some(old_value)) = (layout.rows.get(idx), state.monitors.get(idx).map(|m| m.ui_value)) else {
+                return;
+            };
+            let new_value = layout::value_at(&row.track, x);
+            let delta = new_value - old_value;
+
+            if delta.abs() > 0.001 {
+                let targets: Vec<usize> = if state.lock_mode {
+                    state.apply_sync_delta(idx, delta);
+                    (0..state.monitors.len()).collect()
+                } else {
+                    state.set_absolute(&[idx], new_value);
+                    vec![idx]
+                };
+                state.request_brightness(&targets);
+
+                // Repaint
+                let _ = InvalidateRect(Some(window), None, false);
             }
         }
     }
 
-    // A menu choice travels as the usual `WM_COMMAND`, the same path a hotkey takes.
-    if let Some(id) = command {
-        let _ = PostMessageW(Some(window), WM_COMMAND, WPARAM(id as usize), LPARAM(0));
+    // The theme change and the picture dialog both send messages back to the window, so they
+    // run after the borrow above has ended.
+    match command {
+        Some(Command::SetTheme(theme)) => set_theme(window, theme),
+        Some(Command::PickPicture) => pick_background(window),
+        Some(Command::RemovePicture) => set_background(window, None),
+        None => {}
     }
 }
